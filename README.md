@@ -127,15 +127,57 @@ agentic-poc/
 
 ## Architecture
 
+For detailed C4 diagrams covering all operational modes, see [docs/wiki/ARCHITECTURE.md](docs/wiki/ARCHITECTURE.md).
+
 ### Single Agent Flow
 ```
-User Input → Agent → LLM → Tool Call? → Execute Tool → LLM → Response
+┌──────┐     ┌───────┐     ┌─────────┐     ┌───────┐
+│ User │────▶│  CLI  │────▶│  Agent  │────▶│ Claude│
+└──────┘     └───────┘     └────┬────┘     └───┬───┘
+                                │              │
+                                ▼              │
+                           ┌─────────┐         │
+                           │  Tools  │◀────────┘
+                           │(calc,   │  tool_use
+                           │ file)   │
+                           └─────────┘
 ```
 
 ### Multi-Agent Flow
 ```
-User Goal → Orchestrator → Architect Agent → Plan
-                        → Coder Agent → Execute Plan → Result
+┌──────┐     ┌────────────┐     ┌───────────┐     ┌───────┐
+│ User │────▶│Orchestrator│────▶│ Architect │────▶│ Claude│
+└──────┘     └─────┬──────┘     └─────┬─────┘     └───────┘
+                   │                  │
+                   │                  ▼ Plan
+                   │            ┌───────────┐     ┌───────┐
+                   └───────────▶│   Coder   │────▶│ Claude│
+                                └─────┬─────┘     └───────┘
+                                      │
+                                      ▼
+                                ┌───────────┐
+                                │FileReader │
+                                │FileWriter │
+                                └───────────┘
+```
+
+### MCP Server Mode
+```
+┌──────┐     ┌───────┐     ┌─────────┐     ┌────────────┐
+│ User │────▶│  CLI  │────▶│  Agent  │────▶│ MCPManager │
+└──────┘     └───────┘     └────┬────┘     └──────┬─────┘
+                                │                 │
+                                │                 │ JSON-RPC
+                                │                 ▼
+                                │          ┌────────────┐
+                                │          │ MCP Server │
+                                │          │(subprocess)│
+                                │          └──────┬─────┘
+                                │                 │
+                                ▼                 ▼
+                           ┌─────────┐      ┌─────────┐
+                           │ Claude  │      │  Tools  │
+                           └─────────┘      └─────────┘
 ```
 
 ## Running Tests
