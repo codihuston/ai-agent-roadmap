@@ -155,7 +155,9 @@ go test -v ./test/integration/
 
 ## Development
 
-See [docs/wiki/LEARNINGS.md](docs/wiki/LEARNINGS.md) for design decisions, challenges, and observations encountered during development.
+See [docs/wiki/LEARNINGS.md](docs/wiki/LEARNINGS.md) for design decisions and challenges encountered during development.
+
+See [docs/wiki/OBSERVATIONS.md](docs/wiki/OBSERVATIONS.md) for high-level insights on building agentic systems - differentiation points, testing strategies, memory management, and observability.
 
 ## License
 
