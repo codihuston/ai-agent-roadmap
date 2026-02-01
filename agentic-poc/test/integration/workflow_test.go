@@ -380,20 +380,23 @@ func TestSingleAgentFlow_ConversationMemoryPersistence(t *testing.T) {
 	// Verify conversation memory contains all messages
 	messages := mem.GetMessages()
 
-	// Should have: user message, tool result, assistant response
-	if len(messages) < 3 {
-		t.Fatalf("expected at least 3 messages in memory, got %d", len(messages))
+	// Should have: user message, assistant with tool calls, tool result, assistant response
+	if len(messages) < 4 {
+		t.Fatalf("expected at least 4 messages in memory, got %d", len(messages))
 	}
 
 	// Verify message order and content
 	if messages[0].Role != "user" {
 		t.Errorf("first message role = %q, want 'user'", messages[0].Role)
 	}
-	if messages[1].Role != "tool" {
-		t.Errorf("second message role = %q, want 'tool'", messages[1].Role)
+	if messages[1].Role != "assistant" {
+		t.Errorf("second message role = %q, want 'assistant'", messages[1].Role)
 	}
-	if messages[2].Role != "assistant" {
-		t.Errorf("third message role = %q, want 'assistant'", messages[2].Role)
+	if messages[2].Role != "tool" {
+		t.Errorf("third message role = %q, want 'tool'", messages[2].Role)
+	}
+	if messages[3].Role != "assistant" {
+		t.Errorf("fourth message role = %q, want 'assistant'", messages[3].Role)
 	}
 }
 

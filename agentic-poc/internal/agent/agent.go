@@ -120,6 +120,10 @@ func (a *Agent) Run(ctx context.Context, input string, mem *memory.ConversationM
 			}, nil
 		}
 
+		// Store the assistant's response with tool calls BEFORE executing tools
+		// This is required by Claude API - tool_result must follow tool_use in the same conversation
+		mem.AddAssistantMessageWithToolCalls(resp.Text, resp.ToolCalls)
+
 		// Act: Execute tool calls
 		for _, tc := range resp.ToolCalls {
 			allToolCalls = append(allToolCalls, tc)

@@ -160,10 +160,13 @@ type claudeMsg struct {
 
 // contentPart represents a content part in Claude's message format.
 type contentPart struct {
-	Type      string `json:"type"`
-	Text      string `json:"text,omitempty"`
-	ToolUseID string `json:"tool_use_id,omitempty"`
-	Content   string `json:"content,omitempty"`
+	Type      string                 `json:"type"`
+	Text      string                 `json:"text,omitempty"`
+	ToolUseID string                 `json:"tool_use_id,omitempty"`
+	Content   string                 `json:"content,omitempty"`
+	ID        string                 `json:"id,omitempty"`    // For tool_use blocks
+	Name      string                 `json:"name,omitempty"`  // For tool_use blocks
+	Input     map[string]interface{} `json:"input,omitempty"` // For tool_use blocks
 }
 
 // claudeTool represents a tool definition in Claude's format.
@@ -254,6 +257,27 @@ func (c *ClaudeProvider) convertMessage(msg Message) (claudeMsg, error) {
 			ToolUseID: msg.ToolCallID,
 			Content:   msg.Content,
 		})
+		return cm, nil
+	}
+
+	// Handle assistant messages with tool calls
+	if msg.Role == "assistant" && len(msg.ToolCalls) > 0 {
+		// Add text content if present
+		if msg.Content != "" {
+			cm.Content = append(cm.Content, contentPart{
+				Type: "text",
+				Text: msg.Content,
+			})
+		}
+		// Add tool_use blocks
+		for _, tc := range msg.ToolCalls {
+			cm.Content = append(cm.Content, contentPart{
+				Type:  "tool_use",
+				ID:    tc.ID,
+				Name:  tc.Name,
+				Input: tc.Arguments,
+			})
+		}
 		return cm, nil
 	}
 

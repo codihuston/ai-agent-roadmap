@@ -558,21 +558,25 @@ func TestAgent_Run_ConversationMemoryUpdated(t *testing.T) {
 
 	messages := mem.GetMessages()
 
-	// Should have: user message, tool result, assistant response
-	if len(messages) != 3 {
-		t.Fatalf("expected 3 messages, got %d", len(messages))
+	// Should have: user message, assistant with tool calls, tool result, assistant response
+	if len(messages) != 4 {
+		t.Fatalf("expected 4 messages, got %d", len(messages))
 	}
 
 	if messages[0].Role != "user" || messages[0].Content != "Hello" {
 		t.Errorf("message[0] = %+v, want user message", messages[0])
 	}
 
-	if messages[1].Role != "tool" || messages[1].Content != "tool output" {
-		t.Errorf("message[1] = %+v, want tool result", messages[1])
+	if messages[1].Role != "assistant" || len(messages[1].ToolCalls) != 1 {
+		t.Errorf("message[1] = %+v, want assistant with tool calls", messages[1])
 	}
 
-	if messages[2].Role != "assistant" || messages[2].Content != "Final response" {
-		t.Errorf("message[2] = %+v, want assistant response", messages[2])
+	if messages[2].Role != "tool" || messages[2].Content != "tool output" {
+		t.Errorf("message[2] = %+v, want tool result", messages[2])
+	}
+
+	if messages[3].Role != "assistant" || messages[3].Content != "Final response" {
+		t.Errorf("message[3] = %+v, want assistant response", messages[3])
 	}
 }
 

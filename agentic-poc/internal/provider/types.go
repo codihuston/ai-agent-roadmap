@@ -3,10 +3,11 @@ package provider
 
 // Message represents a single message in a conversation.
 type Message struct {
-	Role       string `json:"role"`
-	Content    string `json:"content"`
-	ToolCallID string `json:"tool_call_id,omitempty"`
-	ToolName   string `json:"tool_name,omitempty"`
+	Role       string     `json:"role"`
+	Content    string     `json:"content"`
+	ToolCallID string     `json:"tool_call_id,omitempty"`
+	ToolName   string     `json:"tool_name,omitempty"`
+	ToolCalls  []ToolCall `json:"tool_calls,omitempty"` // For assistant messages with tool use
 }
 
 // ToolCall represents a request from the LLM to execute a tool.

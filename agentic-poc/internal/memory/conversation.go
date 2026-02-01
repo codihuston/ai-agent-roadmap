@@ -32,6 +32,19 @@ func (m *ConversationMemory) AddMessage(role, content string) {
 	})
 }
 
+// AddAssistantMessageWithToolCalls appends an assistant message that includes tool calls.
+// This is used when the LLM responds with tool_use blocks.
+func (m *ConversationMemory) AddAssistantMessageWithToolCalls(content string, toolCalls []provider.ToolCall) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.messages = append(m.messages, provider.Message{
+		Role:      "assistant",
+		Content:   content,
+		ToolCalls: toolCalls,
+	})
+}
+
 // AddToolResult appends a tool result message to the conversation history.
 // The message includes the tool call ID and tool name for proper context.
 func (m *ConversationMemory) AddToolResult(toolCallID, toolName, result string) {

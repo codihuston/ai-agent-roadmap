@@ -53,12 +53,12 @@
 - [x] 7.2 Implement WorkflowState and phase transitions
 - [x] 7.3 Implement Run() method coordinating Architect -> Coder flow
 - [x] 7.4 Implement error handling and workflow failure states
-- [ ] 7.5 Write unit tests for orchestrator workflow with mocked LLM provider (Validates: Requirements 7.1-7.6, Properties 15, 16, 17)
-  - [ ] 7.5.1 Test successful Architect -> Coder workflow with mocked LLM responses
-  - [ ] 7.5.2 Test workflow state transitions (idle -> planning -> executing -> complete)
-  - [ ] 7.5.3 Test architect failure sets phase to Failed and returns error
-  - [ ] 7.5.4 Test missing plan (architect doesn't call finish_plan) returns error
-  - [ ] 7.5.5 Test coder failure sets phase to Failed and returns partial result with plan
+- [x] 7.5 Write unit tests for orchestrator workflow with mocked LLM provider (Validates: Requirements 7.1-7.6, Properties 15, 16, 17)
+  - [x] 7.5.1 Test successful Architect -> Coder workflow with mocked LLM responses
+  - [x] 7.5.2 Test workflow state transitions (idle -> planning -> executing -> complete)
+  - [x] 7.5.3 Test architect failure sets phase to Failed and returns error
+  - [x] 7.5.4 Test missing plan (architect doesn't call finish_plan) returns error
+  - [x] 7.5.5 Test coder failure sets phase to Failed and returns partial result with plan
 
 ## Task 8: CLI Interface
 - [x] 8.1 Implement CLI struct in `internal/cli/cli.go` with provider, input/output streams (Validates: Requirement 9.1)
