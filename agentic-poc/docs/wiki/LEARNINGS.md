@@ -983,3 +983,244 @@ tests := []struct {
 - **Agent Loop**: Think-Act-Observe pattern, error handling, iteration limits, memory management
 - **Specialized Agents**: Factory functions, system prompts, tool configuration, orchestrator integration
 - **CLI**: Dependency injection, mode separation, user input handling, observability
+
+
+---
+
+## Integration Testing
+
+### Design Decision: Separate integration test directory
+
+**Context**: Integration tests verify end-to-end workflows across multiple components.
+
+**Decision**: Place integration tests in `test/integration/` rather than alongside unit tests:
+
+```
+agentic-poc/
+├── internal/
+│   └── agent/
+│       └── agent_test.go      # Unit tests
+└── test/
+    └── integration/
+        └── workflow_test.go   # Integration tests
+```
+
+**Rationale**:
+- Clear separation between unit and integration tests
+- Integration tests can be run separately (`go test ./test/integration/...`)
+- Follows Go project conventions
+- Easier to manage test dependencies and setup
+
+### Design Decision: Multiple mock provider implementations
+
+**Context**: Different integration tests need different mocking strategies.
+
+**Decision**: Create specialized mock providers for different scenarios:
+
+```go
+// Simple sequential responses
+type mockLLMProvider struct {
+    responses []provider.LLMResponse
+    callCount int
+}
+
+// Multi-agent workflow with agent detection
+type sequentialMockProvider struct {
+    responseSequences [][]provider.LLMResponse
+    currentSequence   int
+}
+
+// Request tracking for verification
+type planTrackingMockProvider struct {
+    architectResponses []provider.LLMResponse
+    coderResponses     []provider.LLMResponse
+    coderRequests      *[]provider.GenerateRequest
+}
+```
+
+**Rationale**:
+- Each mock is focused on specific testing needs
+- `sequentialMockProvider` detects agent type from system prompt
+- `planTrackingMockProvider` captures requests for verification
+- Avoids complex single mock with many configuration options
+
+### Challenge: Detecting which agent is calling the provider
+
+**Context**: In multi-agent workflows, the same provider is used by both Architect and Coder agents.
+
+**Problem**: Need to return different responses based on which agent is making the call.
+
+**Solution**: Detect agent type from the system prompt:
+
+```go
+func (m *sequentialMockProvider) Generate(ctx context.Context, req provider.GenerateRequest) (*provider.LLMResponse, error) {
+    if strings.Contains(req.SystemPrompt, "Architect") {
+        // Return architect responses
+    } else if strings.Contains(req.SystemPrompt, "Coder") {
+        // Return coder responses
+    }
+}
+```
+
+**Rationale**:
+- System prompts are unique to each agent type
+- No need to modify agent code for testing
+- Works with existing agent implementations
+
+### Design Decision: Use real tools in integration tests
+
+**Context**: Integration tests should verify actual behavior, not just mock interactions.
+
+**Decision**: Use real tool implementations (Calculator, FileReader, FileWriter) with mocked LLM:
+
+```go
+// Real calculator tool
+calcTool := tool.NewCalculatorTool()
+agentInstance := agent.NewAgent(agent.AgentConfig{
+    Provider: mockProvider,  // Mocked LLM
+    Tools:    []tool.Tool{calcTool},  // Real tool
+})
+```
+
+**Rationale**:
+- Verifies tool execution actually works
+- Catches integration issues between agent and tools
+- Only the LLM is mocked (external dependency)
+- File operations create real files in temp directories
+
+### Design Decision: Temporary directories for file operations
+
+**Context**: Integration tests that write files need isolated workspaces.
+
+**Decision**: Use `t.TempDir()` for automatic cleanup:
+
+```go
+func TestMultiAgentFlow_ArchitectCoderWorkflow(t *testing.T) {
+    tmpDir := t.TempDir()  // Automatically cleaned up
+    
+    orch := orchestrator.NewOrchestrator(mockProvider, tmpDir)
+    // ... test creates files in tmpDir ...
+    
+    // Verify file was created
+    content, err := os.ReadFile(filepath.Join(tmpDir, "hello.txt"))
+}
+```
+
+**Rationale**:
+- `t.TempDir()` handles cleanup automatically
+- Each test gets isolated directory
+- No test artifacts left behind
+- Can verify actual file contents
+
+### Testing Strategy: Verify workflow state transitions
+
+**Context**: Orchestrator should transition through phases correctly.
+
+**Decision**: Test state at key points:
+
+```go
+// Initial state
+state := orch.State()
+if state.Phase != orchestrator.PhaseIdle { ... }
+
+// After run
+result, err := orch.Run(ctx, goal)
+
+// Final state
+state = orch.State()
+if state.Phase != orchestrator.PhaseComplete { ... }
+```
+
+**Rationale**:
+- Verifies Property 16 (state reflects current phase)
+- Catches state management bugs
+- Documents expected state transitions
+
+### Testing Strategy: Verify plan is passed to Coder
+
+**Context**: Property 15 requires Architect's plan to be passed to Coder.
+
+**Decision**: Use request-tracking mock to capture Coder's input:
+
+```go
+type planTrackingMockProvider struct {
+    coderRequests *[]provider.GenerateRequest
+}
+
+// After test
+firstCoderReq := coderRequests[0]
+for _, msg := range firstCoderReq.Messages {
+    if msg.Role == "user" && strings.Contains(msg.Content, "Create config file") {
+        foundPlan = true
+    }
+}
+```
+
+**Rationale**:
+- Verifies data flow between agents
+- Catches serialization/deserialization issues
+- Documents expected message format
+
+### Testing Strategy: CLI mode switching tests
+
+**Context**: CLI should support both single and multi-agent modes.
+
+**Decision**: Test mode selection with table-driven tests:
+
+```go
+tests := []struct {
+    name       string
+    runMode    func(*cli.CLI) error
+    wantHeader string
+}{
+    {"single agent mode", func(c *cli.CLI) error { return c.RunSingleAgentMode() }, "Single Agent Mode"},
+    {"multi agent mode", func(c *cli.CLI) error { return c.RunMultiAgentMode() }, "Multi-Agent Mode"},
+}
+```
+
+**Rationale**:
+- Verifies both modes work correctly
+- Easy to add new modes
+- Clear documentation of expected behavior
+
+### Testing Strategy: Graceful exit command tests
+
+**Context**: Both "exit" and "quit" should work in both modes, case-insensitive.
+
+**Decision**: Comprehensive table-driven tests:
+
+```go
+exitCommands := []string{"exit", "quit", "EXIT", "QUIT", "Exit", "Quit"}
+modes := []struct {
+    name    string
+    runMode func(*cli.CLI) error
+}{
+    {"single", func(c *cli.CLI) error { return c.RunSingleAgentMode() }},
+    {"multi", func(c *cli.CLI) error { return c.RunMultiAgentMode() }},
+}
+
+for _, mode := range modes {
+    for _, cmd := range exitCommands {
+        t.Run(mode.name+"_"+cmd, func(t *testing.T) { ... })
+    }
+}
+```
+
+**Rationale**:
+- Tests all combinations (12 test cases)
+- Catches case-sensitivity bugs
+- Verifies consistent behavior across modes
+
+---
+
+## Categories
+
+- **Parsing**: JSON serialization, nil vs empty handling
+- **Testing**: Property-based testing with gopter, generator design, mock HTTP servers, mock LLM providers, integration tests with temp directories, table-driven tests, workflow verification
+- **LLM Providers**: Interface design, Claude API format, error handling
+- **Tool Calling**: Interface design, type conversion, security, plan capture
+- **Memory**: Thread safety, defensive copying, API design
+- **Agent Loop**: Think-Act-Observe pattern, error handling, iteration limits, memory management
+- **Specialized Agents**: Factory functions, system prompts, tool configuration, orchestrator integration
+- **CLI**: Dependency injection, mode separation, user input handling, observability
+- **Integration Testing**: Mock provider strategies, agent detection, real tool usage, state verification
