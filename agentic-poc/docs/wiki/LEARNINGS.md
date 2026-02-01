@@ -780,3 +780,206 @@ func TestNewArchitectAgent(t *testing.T) {
 - **Memory**: Thread safety, defensive copying, API design
 - **Agent Loop**: Think-Act-Observe pattern, error handling, iteration limits, memory management
 - **Specialized Agents**: Factory functions, system prompts, tool configuration, orchestrator integration
+
+
+---
+
+## CLI Interface
+
+### Design Decision: Dependency injection for input/output streams
+
+**Context**: The CLI needs to be testable without requiring actual stdin/stdout interaction.
+
+**Decision**: Accept `io.Reader` and `io.Writer` interfaces for input/output:
+
+```go
+type CLI struct {
+    provider provider.LLMProvider
+    output   io.Writer
+    input    *bufio.Scanner
+    basePath string
+}
+
+func NewCLI(llmProvider provider.LLMProvider) *CLI
+func NewCLIWithIO(llmProvider provider.LLMProvider, input io.Reader, output io.Writer) *CLI
+```
+
+**Rationale**:
+- `NewCLI` uses os.Stdin/os.Stdout for production use
+- `NewCLIWithIO` allows injecting `bytes.Buffer` and `strings.Reader` for testing
+- Follows Dependency Inversion Principle - depend on interfaces, not concrete types
+- Tests can verify output content and simulate user input
+
+### Design Decision: Separate methods for single and multi-agent modes
+
+**Context**: The CLI supports two distinct modes of operation.
+
+**Decision**: Provide separate public methods for each mode:
+
+```go
+func (c *CLI) RunSingleAgentMode() error
+func (c *CLI) RunMultiAgentMode() error
+```
+
+**Rationale**:
+- Clear separation of concerns
+- Each method is focused and easier to test
+- main.go can select mode based on command-line flag
+- Easier to add new modes in the future
+
+### Design Decision: Case-insensitive exit commands
+
+**Context**: Users might type "exit", "EXIT", "Exit", "quit", etc.
+
+**Decision**: Normalize input to lowercase before checking:
+
+```go
+func isExitCommand(input string) bool {
+    lower := strings.ToLower(strings.TrimSpace(input))
+    return lower == "exit" || lower == "quit"
+}
+```
+
+**Rationale**:
+- Better user experience - any case works
+- Handles accidental whitespace
+- Simple, predictable behavior
+
+### Design Decision: Display intermediate steps for observability
+
+**Context**: Requirement 9.5 requires showing tool calls and agent transitions.
+
+**Decision**: Print tool calls and transitions with clear formatting:
+
+```go
+func (c *CLI) printToolCall(tc provider.ToolCall) {
+    c.printf("  [Tool Call] %s\n", tc.Name)
+    for key, value := range tc.Arguments {
+        c.printf("    %s: %v\n", key, value)
+    }
+}
+
+func (c *CLI) printAgentTransition(from, to string) {
+    c.printf("\n>>> Agent Transition: %s -> %s\n\n", from, to)
+}
+```
+
+**Rationale**:
+- Users can see what the agent is doing
+- Helpful for debugging and understanding agent behavior
+- Clear visual markers (`[Tool Call]`, `>>>`) make output scannable
+- Arguments are displayed for full transparency
+
+### Design Decision: Graceful handling of EOF
+
+**Context**: Users might pipe input or close stdin unexpectedly.
+
+**Decision**: Treat EOF as a graceful exit:
+
+```go
+if !c.input.Scan() {
+    if err := c.input.Err(); err != nil {
+        return fmt.Errorf("input error: %w", err)
+    }
+    c.println("\nGoodbye!")
+    return nil
+}
+```
+
+**Rationale**:
+- Supports piped input (`echo "hello" | agent`)
+- Ctrl+D (EOF) exits cleanly
+- Actual errors are still reported
+- Consistent "Goodbye!" message for all exit paths
+
+### Design Decision: Skip empty input lines
+
+**Context**: Users might accidentally press Enter without typing anything.
+
+**Decision**: Continue the loop on empty input:
+
+```go
+input := strings.TrimSpace(c.input.Text())
+if input == "" {
+    continue
+}
+```
+
+**Rationale**:
+- Avoids sending empty prompts to the LLM
+- Better user experience - no error for accidental Enter
+- Consistent behavior in both modes
+
+### Design Decision: main.go uses flag package for CLI arguments
+
+**Context**: Need to select between single and multi-agent modes.
+
+**Decision**: Use standard library `flag` package:
+
+```go
+mode := flag.String("mode", "single", "Mode to run: 'single' or 'multi'")
+basePath := flag.String("path", ".", "Base path for file operations")
+help := flag.Bool("help", false, "Show help message")
+```
+
+**Rationale**:
+- Standard library - no external dependencies
+- Familiar interface for Go developers
+- Automatic help generation with `-h`
+- Default values clearly specified
+
+### Testing Strategy: Mock provider with controlled responses
+
+**Context**: CLI tests need to verify behavior without real LLM calls.
+
+**Decision**: Create a simple mock provider for testing:
+
+```go
+type mockProvider struct {
+    responses []*provider.LLMResponse
+    callIndex int
+    calls     []provider.GenerateRequest
+}
+```
+
+**Key features**:
+- Returns predefined responses in sequence
+- Tracks all calls for verification
+- Simple implementation focused on CLI testing needs
+
+### Testing Strategy: Table-driven tests for exit commands
+
+**Context**: Need to verify all variations of exit commands work.
+
+**Decision**: Use table-driven tests:
+
+```go
+tests := []struct {
+    input    string
+    expected bool
+}{
+    {"exit", true},
+    {"EXIT", true},
+    {"quit", true},
+    {"hello", false},
+    // ...
+}
+```
+
+**Rationale**:
+- Easy to add new test cases
+- Clear documentation of expected behavior
+- Follows Go testing conventions
+
+---
+
+## Categories
+
+- **Parsing**: JSON serialization, nil vs empty handling
+- **Testing**: Property-based testing with gopter, generator design, mock HTTP servers, mock LLM providers, integration tests with temp directories, table-driven tests
+- **LLM Providers**: Interface design, Claude API format, error handling
+- **Tool Calling**: Interface design, type conversion, security, plan capture
+- **Memory**: Thread safety, defensive copying, API design
+- **Agent Loop**: Think-Act-Observe pattern, error handling, iteration limits, memory management
+- **Specialized Agents**: Factory functions, system prompts, tool configuration, orchestrator integration
+- **CLI**: Dependency injection, mode separation, user input handling, observability

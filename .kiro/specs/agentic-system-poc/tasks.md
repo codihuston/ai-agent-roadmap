@@ -53,27 +53,32 @@
 - [x] 7.2 Implement WorkflowState and phase transitions
 - [x] 7.3 Implement Run() method coordinating Architect -> Coder flow
 - [x] 7.4 Implement error handling and workflow failure states
-- [x] 7.5 Write unit tests for orchestrator workflow (mocked agents)
+- [ ] 7.5 Write unit tests for orchestrator workflow with mocked LLM provider (Validates: Requirements 7.1-7.6, Properties 15, 16, 17)
+  - [ ] 7.5.1 Test successful Architect -> Coder workflow with mocked LLM responses
+  - [ ] 7.5.2 Test workflow state transitions (idle -> planning -> executing -> complete)
+  - [ ] 7.5.3 Test architect failure sets phase to Failed and returns error
+  - [ ] 7.5.4 Test missing plan (architect doesn't call finish_plan) returns error
+  - [ ] 7.5.5 Test coder failure sets phase to Failed and returns partial result with plan
 
 ## Task 8: CLI Interface
-- [ ] 8.1 Implement CLI struct in `internal/cli/cli.go`
-- [ ] 8.2 Implement RunSingleAgentMode() with interactive loop
-- [ ] 8.3 Implement RunMultiAgentMode() with goal input
-- [ ] 8.4 Implement intermediate step display (tool calls, agent transitions)
-- [ ] 8.5 Implement graceful exit on "exit" or "quit"
-- [ ] 8.6 Create main.go entry point in `cmd/agent/main.go`
+- [x] 8.1 Implement CLI struct in `internal/cli/cli.go` with provider, input/output streams (Validates: Requirement 9.1)
+- [x] 8.2 Implement RunSingleAgentMode() with interactive loop using Calculator and FileReader tools (Validates: Requirement 9.2)
+- [x] 8.3 Implement RunMultiAgentMode() that invokes Orchestrator with user goal (Validates: Requirement 9.3)
+- [x] 8.4 Implement intermediate step display showing tool calls and agent transitions (Validates: Requirement 9.5)
+- [x] 8.5 Implement graceful exit on "exit" or "quit" commands (Validates: Requirement 9.4)
+- [x] 8.6 Create main.go entry point in `cmd/agent/main.go` with mode selection flag (Validates: Requirements 9.2, 9.3)
 
 ## Task 9: Integration Testing
-- [ ] 9.1 Create integration test for single agent flow in `test/integration/workflow_test.go`
-- [ ] 9.2 Create integration test for multi-agent flow
-- [ ] 9.3 Create integration test for CLI mode switching
+- [ ] 9.1 Create integration test for single agent flow with mocked LLM in `test/integration/workflow_test.go` (Validates: Requirements 3, 4)
+- [ ] 9.2 Create integration test for multi-agent Architect->Coder flow with mocked LLM (Validates: Requirements 5, 6, 7)
+- [ ] 9.3 Create integration test for CLI mode switching between single and multi-agent modes (Validates: Requirements 9.2, 9.3)
 
 ## Task 10: Documentation
-- [ ] 10.1 Create docs/wiki/README.md with wiki structure
-- [ ] 10.2 Create docs/wiki/challenges/ directory with template
-- [ ] 10.3 Create docs/wiki/tradeoffs/ directory with template
-- [ ] 10.4 Create docs/wiki/observations/ directory with template
-- [ ] 10.5 Write project README.md with setup and usage instructions
+- [x] 10.1 Create docs/wiki/LEARNINGS.md with consolidated documentation structure
+- [x] 10.2 Document challenges encountered during development in LEARNINGS.md
+- [x] 10.3 Document trade-off decisions in LEARNINGS.md
+- [x] 10.4 Document observations about LLM providers and patterns in LEARNINGS.md
+- [ ] 10.5 Write project README.md in `agentic-poc/README.md` with setup instructions, environment variables, and usage examples (Validates: Requirement 10)
 
 ## Task 11: MCP Integration (Future Phase)
 - [ ]* 11.1 Define MCPClient interface in `internal/mcp/client.go`
