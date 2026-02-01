@@ -72,7 +72,7 @@ func (m *MCPManager) loadServer(ctx context.Context, name string, cfg MCPServerC
 	m.clients[name] = client
 
 	for _, toolInfo := range tools {
-		wrapper := NewMCPToolWrapper(client, toolInfo)
+		wrapper := NewMCPToolWrapperWithServer(client, toolInfo, name)
 		// Use server name prefix to avoid tool name collisions
 		toolKey := fmt.Sprintf("%s/%s", name, toolInfo.Name)
 		m.tools[toolKey] = wrapper

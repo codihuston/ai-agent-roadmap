@@ -1,9 +1,15 @@
 {
   "mcpServers": {
+    "agentic-tools": {
+      "command": "./mcp-server",
+      "args": [],
+      "disabled": false,
+      "autoApprove": ["calculator", "read_file"]
+    },
     "filesystem": {
       "command": "npx",
       "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp/workspace"],
-      "disabled": false,
+      "disabled": true,
       "autoApprove": ["read_file", "list_directory"]
     },
     "web-search": {

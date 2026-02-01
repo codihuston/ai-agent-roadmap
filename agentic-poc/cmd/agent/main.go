@@ -2,6 +2,7 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"os"
@@ -14,6 +15,8 @@ func main() {
 	// Define command-line flags
 	mode := flag.String("mode", "single", "Mode to run: 'single' for single-agent mode, 'multi' for multi-agent mode")
 	basePath := flag.String("path", ".", "Base path for file operations")
+	mcpOnly := flag.Bool("mcp-only", false, "Use only MCP tools (no built-in tools). Requires mcp.json config.")
+	mcpConfig := flag.String("mcp-config", "mcp.json", "Path to MCP configuration file")
 	help := flag.Bool("help", false, "Show help message")
 
 	flag.Parse()
@@ -41,6 +44,17 @@ func main() {
 	// Create the CLI
 	cliInstance := cli.NewCLI(llmProvider)
 	cliInstance.SetBasePath(*basePath)
+	cliInstance.SetMCPOnly(*mcpOnly)
+	defer cliInstance.Shutdown()
+
+	// Load MCP config if mcp-only mode or if config exists
+	if *mcpOnly {
+		ctx := context.Background()
+		if err := cliInstance.LoadMCPConfig(ctx, *mcpConfig); err != nil {
+			fmt.Fprintf(os.Stderr, "Error loading MCP config: %v\n", err)
+			os.Exit(1)
+		}
+	}
 
 	// Run the appropriate mode
 	var runErr error
@@ -69,6 +83,10 @@ func printUsage() {
 	fmt.Println("        Mode to run: 'single' for single-agent mode, 'multi' for multi-agent mode (default \"single\")")
 	fmt.Println("  -path string")
 	fmt.Println("        Base path for file operations (default \".\")")
+	fmt.Println("  -mcp-only")
+	fmt.Println("        Use only MCP tools instead of built-in tools. Requires mcp.json config.")
+	fmt.Println("  -mcp-config string")
+	fmt.Println("        Path to MCP configuration file (default \"mcp.json\")")
 	fmt.Println("  -help")
 	fmt.Println("        Show this help message")
 	fmt.Println()
@@ -76,11 +94,14 @@ func printUsage() {
 	fmt.Println("  ANTHROPIC_API_KEY    API key for Claude (required)")
 	fmt.Println()
 	fmt.Println("Examples:")
-	fmt.Println("  # Run in single-agent mode (default)")
+	fmt.Println("  # Run in single-agent mode with built-in tools (default)")
 	fmt.Println("  agent")
 	fmt.Println()
 	fmt.Println("  # Run in multi-agent mode")
 	fmt.Println("  agent -mode multi")
+	fmt.Println()
+	fmt.Println("  # Run with tools from MCP server (requires mcp.json)")
+	fmt.Println("  agent -mcp-only")
 	fmt.Println()
 	fmt.Println("  # Run with a specific base path for file operations")
 	fmt.Println("  agent -mode single -path /tmp/workspace")

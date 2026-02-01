@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"agentic-poc/internal/agent"
+	"agentic-poc/internal/mcp"
 	"agentic-poc/internal/memory"
 	"agentic-poc/internal/orchestrator"
 	"agentic-poc/internal/provider"
@@ -22,10 +23,12 @@ import (
 //
 // Validates: Requirement 9.1
 type CLI struct {
-	provider provider.LLMProvider
-	output   io.Writer
-	input    *bufio.Scanner
-	basePath string
+	provider   provider.LLMProvider
+	output     io.Writer
+	input      *bufio.Scanner
+	basePath   string
+	mcpManager *mcp.MCPManager
+	mcpOnly    bool // If true, only use MCP tools (no built-in tools)
 }
 
 // NewCLI creates a new CLI instance with the given LLM provider.
@@ -53,6 +56,42 @@ func NewCLIWithIO(llmProvider provider.LLMProvider, input io.Reader, output io.W
 // SetBasePath sets the base path for file operations.
 func (c *CLI) SetBasePath(path string) {
 	c.basePath = path
+}
+
+// SetMCPOnly sets whether to use only MCP tools (no built-in tools).
+func (c *CLI) SetMCPOnly(mcpOnly bool) {
+	c.mcpOnly = mcpOnly
+}
+
+// LoadMCPConfig loads MCP servers from the given config file path.
+// Returns an error if mcpOnly is true and config cannot be loaded.
+func (c *CLI) LoadMCPConfig(ctx context.Context, configPath string) error {
+	cfg, err := mcp.LoadMCPConfig(configPath)
+	if err != nil {
+		if c.mcpOnly {
+			return fmt.Errorf("mcp-only mode requires valid config: %w", err)
+		}
+		// Config file not found is not an error in normal mode
+		return nil
+	}
+
+	c.mcpManager = mcp.NewMCPManager()
+	if err := c.mcpManager.LoadFromConfig(ctx, cfg); err != nil {
+		return fmt.Errorf("failed to load MCP servers: %w", err)
+	}
+
+	if c.mcpOnly && c.mcpManager.ToolCount() == 0 {
+		return fmt.Errorf("mcp-only mode but no MCP tools loaded")
+	}
+
+	return nil
+}
+
+// Shutdown cleans up resources, including MCP connections.
+func (c *CLI) Shutdown() {
+	if c.mcpManager != nil {
+		c.mcpManager.Shutdown()
+	}
 }
 
 // printf is a helper to write formatted output.
@@ -88,20 +127,53 @@ func isExitCommand(input string) bool {
 }
 
 // RunSingleAgentMode runs the CLI in single-agent mode with an interactive loop.
-// The agent has access to Calculator and FileReader tools.
+// The agent has access to Calculator and FileReader tools, plus any MCP tools.
+// If mcpOnly is true, only MCP tools are used.
 //
 // Validates: Requirement 9.2
 func (c *CLI) RunSingleAgentMode() error {
 	c.println("=== Single Agent Mode ===")
-	c.println("Available tools: calculator, read_file")
+
+	var tools []tool.Tool
+
+	if c.mcpOnly {
+		// MCP-only mode: use only tools from MCP servers
+		c.println("Mode: MCP-only (tools loaded from MCP servers)")
+		if c.mcpManager == nil {
+			return fmt.Errorf("mcp-only mode but no MCP manager configured")
+		}
+		tools = c.mcpManager.GetTools()
+		if len(tools) == 0 {
+			return fmt.Errorf("mcp-only mode but no MCP tools available")
+		}
+		c.println("Available MCP tools:")
+		for _, t := range tools {
+			c.printf("  - %s: %s\n", t.Name(), t.Description())
+		}
+	} else {
+		// Normal mode: use built-in tools
+		c.println("Mode: Built-in tools")
+		tools = []tool.Tool{
+			tool.NewCalculatorTool(),
+			tool.NewFileReaderTool(c.basePath),
+		}
+		c.println("Available tools: calculator, read_file")
+
+		// Also add MCP tools if available
+		if c.mcpManager != nil {
+			mcpTools := c.mcpManager.GetTools()
+			if len(mcpTools) > 0 {
+				c.printf("Additional MCP tools: %d\n", len(mcpTools))
+				for _, t := range mcpTools {
+					c.printf("  - %s\n", t.Name())
+				}
+				tools = append(tools, mcpTools...)
+			}
+		}
+	}
+
 	c.println("Type 'exit' or 'quit' to exit.")
 	c.println()
-
-	// Create tools for single agent mode
-	tools := []tool.Tool{
-		tool.NewCalculatorTool(),
-		tool.NewFileReaderTool(c.basePath),
-	}
 
 	// Create the agent with a clear system prompt
 	agentInstance := agent.NewAgent(agent.AgentConfig{

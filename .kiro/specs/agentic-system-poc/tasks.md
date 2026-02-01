@@ -89,3 +89,12 @@
 - [x] 11.6 Write unit tests for MCP components
 - [x] 11.7 (PBT) Write property test for MCP tool interface compliance (Property 21)
 - [x] 11.8 Create example mcp.json configuration file
+
+
+## Task 12: MCP Server Implementation
+- [ ] 12.1 Implement MCP server in `internal/mcp/server.go` that exposes tools via JSON-RPC
+- [ ] 12.2 Create `cmd/mcp-server/main.go` entry point for running as standalone server
+- [ ] 12.3 Expose Calculator and FileReader tools via MCP protocol
+- [ ] 12.4 Write unit tests for MCP server
+- [ ] 12.5 Integrate MCP client with agent CLI (load tools from mcp.json)
+- [ ] 12.6 Test end-to-end: agent using tools from our MCP server

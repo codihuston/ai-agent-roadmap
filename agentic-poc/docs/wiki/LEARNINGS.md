@@ -1647,3 +1647,170 @@ properties.Property("MCPToolWrapper returns correct name from MCP metadata", pro
 - **CLI**: Dependency injection, mode separation, exit handling, intermediate step display
 - **Orchestrator**: State management, partial results, failure handling, mock provider design
 - **MCP Integration**: Client interface, stdio transport, tool wrapper, multi-server management, configuration
+
+
+---
+
+## MCP Server Implementation
+
+### Design Decision: Expose built-in tools via MCP protocol
+
+**Context**: The agent can use tools directly from the library, but we also want to support external tool servers via MCP (Model Context Protocol).
+
+**Decision**: Implement an MCP server that exposes our built-in tools (Calculator, FileReader) via JSON-RPC 2.0 over stdio:
+
+```go
+type MCPServer struct {
+    tools   map[string]tool.Tool
+    input   io.Reader
+    output  io.Writer
+    name    string
+    version string
+}
+
+func NewMCPServer(name, version string, tools []tool.Tool) *MCPServer
+func (s *MCPServer) Serve(ctx context.Context, input io.Reader, output io.Writer) error
+```
+
+**Rationale**:
+- Enables testing the MCP client with our own server
+- Demonstrates full MCP round-trip (agent → client → server → tool → response)
+- Same tools can be used directly or via MCP protocol
+- Useful for debugging MCP integration issues
+
+### Design Decision: CLI flag for MCP-only mode
+
+**Context**: Need to test the agent using tools exclusively from MCP servers.
+
+**Decision**: Add `--mcp-only` flag that disables built-in tools:
+
+```bash
+# Normal mode: uses built-in tools directly
+./agent
+
+# MCP-only mode: loads tools from mcp.json
+./agent -mcp-only -mcp-config mcp.json
+```
+
+**Rationale**:
+- Clear separation between direct tool use and MCP tool use
+- Enables end-to-end testing of MCP integration
+- Validates that MCP wrapper correctly adapts tools to Tool interface
+- Useful for debugging MCP-specific issues
+
+### Design Decision: Comprehensive logging for MCP operations
+
+**Context**: MCP involves multiple components (client, server, wrapper) and debugging requires visibility into each step.
+
+**Decision**: Add structured logging at key points:
+
+**Client side (MCPToolWrapper)**:
+```go
+log.Printf("[MCP Client] Calling tool %q on server %q with args: %v", w.info.Name, w.serverName, args)
+log.Printf("[MCP Client] Tool %q succeeded: %s", w.info.Name, truncate(result.Output, 100))
+log.Printf("[MCP Client] Tool %q failed: %s", w.info.Name, result.Error)
+```
+
+**Server side (MCPServer)**:
+```go
+log.Printf("[MCP Server] Received request: method=%s id=%d", req.Method, req.ID)
+log.Printf("[MCP Server] Executing tool %q with args: %v", name, args)
+log.Printf("[MCP Server] Tool %q succeeded: %s", name, result.Output)
+```
+
+**Rationale**:
+- `[MCP Client]` and `[MCP Server]` prefixes make it easy to trace request flow
+- Logging args and results helps debug tool execution issues
+- Truncating long outputs keeps logs readable
+- Server logs go to stderr to not interfere with JSON-RPC on stdout
+
+### Design Decision: Server name tracking in MCPToolWrapper
+
+**Context**: When multiple MCP servers are configured, need to know which server a tool came from.
+
+**Decision**: Store server name in wrapper and include in logs:
+
+```go
+type MCPToolWrapper struct {
+    client     MCPClient
+    info       MCPToolInfo
+    serverName string  // Added for logging
+}
+
+func NewMCPToolWrapperWithServer(client MCPClient, info MCPToolInfo, serverName string) *MCPToolWrapper
+```
+
+**Rationale**:
+- Logs show which server is being called
+- Helps debug multi-server configurations
+- Tool names might collide across servers; server name provides context
+
+### Challenge: JSON-RPC message framing
+
+**Context**: MCP uses JSON-RPC 2.0 over stdio with newline-delimited messages.
+
+**Problem**: Need to correctly frame messages for both reading and writing.
+
+**Solution**: Use newline as message delimiter:
+
+```go
+// Writing
+data, _ := json.Marshal(resp)
+s.output.Write(append(data, '\n'))
+
+// Reading
+scanner := bufio.NewScanner(input)
+for scanner.Scan() {
+    line := scanner.Bytes()
+    var req JSONRPCRequest
+    json.Unmarshal(line, &req)
+    // ...
+}
+```
+
+**Lesson**: Keep framing simple - one JSON object per line, newline terminated.
+
+### Testing Strategy: Concurrent server tests with timeouts
+
+**Context**: Server tests need to run the server in a goroutine and verify responses.
+
+**Decision**: Use context with timeout and goroutines:
+
+```go
+func TestMCPServer_Initialize(t *testing.T) {
+    server := NewMCPServer("test-server", "1.0.0", nil)
+    
+    input := `{"jsonrpc":"2.0","id":1,"method":"initialize",...}\n`
+    var output bytes.Buffer
+    
+    ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+    defer cancel()
+    
+    go server.Serve(ctx, strings.NewReader(input), &output)
+    time.Sleep(50 * time.Millisecond)
+    
+    var resp JSONRPCResponse
+    json.Unmarshal(output.Bytes(), &resp)
+    // ... verify response
+}
+```
+
+**Rationale**:
+- Timeout prevents tests from hanging
+- Goroutine allows server to process while test waits
+- Small sleep ensures server has time to respond
+- Context cancellation cleanly stops server
+
+---
+
+## Categories
+
+- **Parsing**: JSON serialization, nil vs empty handling, JSON-RPC framing
+- **Testing**: Property-based testing with gopter, generator design, mock HTTP servers, mock LLM providers, integration tests with temp directories, concurrent server tests
+- **LLM Providers**: Interface design, Claude API format, error handling
+- **Tool Calling**: Interface design, type conversion, security, plan capture, MCP tool wrapping
+- **Memory**: Thread safety, defensive copying, API design
+- **Agent Loop**: Think-Act-Observe pattern, error handling, iteration limits, memory management
+- **Specialized Agents**: Factory functions, system prompts, tool configuration, orchestrator integration
+- **CLI**: Dependency injection, mode selection, exit handling, MCP-only mode
+- **MCP**: Server implementation, client logging, JSON-RPC protocol, tool exposure
