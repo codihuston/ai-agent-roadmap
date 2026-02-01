@@ -1224,3 +1224,154 @@ for _, mode := range modes {
 - **Specialized Agents**: Factory functions, system prompts, tool configuration, orchestrator integration
 - **CLI**: Dependency injection, mode separation, user input handling, observability
 - **Integration Testing**: Mock provider strategies, agent detection, real tool usage, state verification
+
+
+---
+
+## Orchestrator Testing
+
+### Design Decision: Multiple mock provider types for different scenarios
+
+**Context**: Orchestrator tests need to simulate various failure scenarios (architect failure, coder failure, missing plan).
+
+**Decision**: Create specialized mock providers for different test scenarios:
+
+```go
+// Basic mock that returns responses in sequence
+type MockLLMProvider struct {
+    responses []provider.LLMResponse
+    callCount int
+    err       error
+}
+
+// Mock that fails after N successful calls
+type FailAfterNCallsProvider struct {
+    responses []provider.LLMResponse
+    callCount int
+    failAfter int
+    failError error
+}
+```
+
+**Rationale**:
+- `MockLLMProvider` handles simple success/failure cases
+- `FailAfterNCallsProvider` enables testing partial failures (architect succeeds, coder fails)
+- Each mock is simple and focused on its specific use case
+- Avoids complex conditional logic in a single mock
+
+### Challenge: Tool arguments format in mock responses
+
+**Context**: The FinishPlanTool expects arguments as a map with `goal` and `steps` fields, not a JSON string.
+
+**Problem**: Initial tests passed a JSON string in a `plan` field, which the tool couldn't parse.
+
+**Solution**: Mock responses must match the exact format the tool expects:
+
+```go
+// Wrong - tool can't parse this
+Arguments: map[string]interface{}{
+    "plan": `{"goal":"Test","steps":[...]}`,
+}
+
+// Correct - matches tool's expected format
+Arguments: map[string]interface{}{
+    "goal": "Test goal",
+    "steps": []interface{}{
+        map[string]interface{}{
+            "description": "Step 1",
+            "action":      "write_file",
+            "parameters":  map[string]interface{}{},
+        },
+    },
+}
+```
+
+**Lesson**: When mocking LLM responses with tool calls, the arguments must match exactly what the tool's Execute method expects, not what the LLM might output as text.
+
+### Testing Strategy: Verify state transitions through State() method
+
+**Context**: Property 16 requires that WorkflowState.Phase accurately reflects the current phase.
+
+**Decision**: Test state at key points:
+
+```go
+// Before run
+if orch.State().Phase != PhaseIdle {
+    t.Errorf("Expected initial phase idle")
+}
+
+// After successful run
+if orch.State().Phase != PhaseComplete {
+    t.Errorf("Expected final phase complete")
+}
+
+// After failure
+if orch.State().Phase != PhaseFailed {
+    t.Errorf("Expected phase Failed")
+}
+```
+
+**Rationale**:
+- State() returns a copy, so tests verify the actual internal state
+- Tests verify both success and failure state transitions
+- Error message is also stored in state for failure cases
+
+### Testing Strategy: Verify partial results on coder failure
+
+**Context**: Property 17 requires that coder failure returns the plan that was created.
+
+**Decision**: Test that result.Plan is populated even when coder fails:
+
+```go
+result, err := orch.Run(ctx, "Test goal")
+
+// Error should be returned
+if err == nil {
+    t.Fatal("Expected error when coder fails")
+}
+
+// But plan should still be present
+if result.Plan == nil {
+    t.Error("Expected plan to be present in partial result")
+}
+```
+
+**Rationale**:
+- Partial results are valuable for debugging and recovery
+- Orchestrator should preserve work done before failure
+- Tests verify both error and partial result simultaneously
+
+### Design Decision: Thread-safety test for State() method
+
+**Context**: State() should return a copy to prevent external modification of internal state.
+
+**Decision**: Test that modifying returned state doesn't affect orchestrator:
+
+```go
+state1 := orch.State()
+state1.Phase = PhaseFailed  // Modify the copy
+
+state2 := orch.State()
+if state2.Phase != PhaseIdle {
+    t.Errorf("Expected phase unchanged")
+}
+```
+
+**Rationale**:
+- Verifies defensive copying is working
+- Prevents subtle bugs from shared state
+- Documents expected behavior for API users
+
+---
+
+## Categories
+
+- **Parsing**: JSON serialization, nil vs empty handling
+- **Testing**: Property-based testing with gopter, generator design, mock HTTP servers, mock LLM providers, integration tests with temp directories, orchestrator mocking strategies
+- **LLM Providers**: Interface design, Claude API format, error handling
+- **Tool Calling**: Interface design, type conversion, security, plan capture
+- **Memory**: Thread safety, defensive copying, API design
+- **Agent Loop**: Think-Act-Observe pattern, error handling, iteration limits, memory management
+- **Specialized Agents**: Factory functions, system prompts, tool configuration, orchestrator integration
+- **CLI**: Dependency injection, mode separation, exit handling, intermediate step display
+- **Orchestrator**: State management, partial results, failure handling, mock provider design
