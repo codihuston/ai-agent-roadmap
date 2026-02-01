@@ -3,11 +3,11 @@
 This document provides C4 diagrams for the three main operational modes of the agentic system.
 
 ## Table of Contents
-
+MCP
 1. [System Context](#system-context)
 2. [Single Agent Mode](#single-agent-mode)
 3. [Multi-Agent Mode](#multi-agent-mode)
-4. [MCP Server Mode](#mcp-server-mode)
+4. [ Server Mode](#mcp-server-mode)
 
 ---
 
