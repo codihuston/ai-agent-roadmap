@@ -69,16 +69,16 @@
 - [x] 8.6 Create main.go entry point in `cmd/agent/main.go` with mode selection flag (Validates: Requirements 9.2, 9.3)
 
 ## Task 9: Integration Testing
-- [ ] 9.1 Create integration test for single agent flow with mocked LLM in `test/integration/workflow_test.go` (Validates: Requirements 3, 4)
-- [ ] 9.2 Create integration test for multi-agent Architect->Coder flow with mocked LLM (Validates: Requirements 5, 6, 7)
-- [ ] 9.3 Create integration test for CLI mode switching between single and multi-agent modes (Validates: Requirements 9.2, 9.3)
+- [x] 9.1 Create integration test for single agent flow with mocked LLM in `test/integration/workflow_test.go` (Validates: Requirements 3, 4)
+- [x] 9.2 Create integration test for multi-agent Architect->Coder flow with mocked LLM (Validates: Requirements 5, 6, 7)
+- [x] 9.3 Create integration test for CLI mode switching between single and multi-agent modes (Validates: Requirements 9.2, 9.3)
 
 ## Task 10: Documentation
 - [x] 10.1 Create docs/wiki/LEARNINGS.md with consolidated documentation structure
 - [x] 10.2 Document challenges encountered during development in LEARNINGS.md
 - [x] 10.3 Document trade-off decisions in LEARNINGS.md
 - [x] 10.4 Document observations about LLM providers and patterns in LEARNINGS.md
-- [ ] 10.5 Write project README.md in `agentic-poc/README.md` with setup instructions, environment variables, and usage examples (Validates: Requirement 10)
+- [x] 10.5 Write project README.md in `agentic-poc/README.md` with setup instructions, environment variables, and usage examples (Validates: Requirement 10)
 
 ## Task 11: MCP Integration (Future Phase)
 - [ ]* 11.1 Define MCPClient interface in `internal/mcp/client.go`
