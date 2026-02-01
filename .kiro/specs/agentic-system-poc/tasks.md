@@ -81,11 +81,11 @@
 - [x] 10.5 Write project README.md in `agentic-poc/README.md` with setup instructions, environment variables, and usage examples (Validates: Requirement 10)
 
 ## Task 11: MCP Integration (Future Phase)
-- [ ]* 11.1 Define MCPClient interface in `internal/mcp/client.go`
-- [ ]* 11.2 Implement StdioMCPClient in `internal/mcp/stdio.go`
-- [ ]* 11.3 Implement MCPToolWrapper in `internal/mcp/wrapper.go`
-- [ ]* 11.4 Implement MCPManager in `internal/mcp/manager.go`
-- [ ]* 11.5 Implement config loading in `internal/mcp/config.go`
-- [ ]* 11.6 Write unit tests for MCP components
-- [ ]* 11.7 (PBT) Write property test for MCP tool interface compliance (Property 21)
-- [ ]* 11.8 Create example mcp.json configuration file
+- [x] 11.1 Define MCPClient interface in `internal/mcp/client.go`
+- [x] 11.2 Implement StdioMCPClient in `internal/mcp/stdio.go`
+- [x] 11.3 Implement MCPToolWrapper in `internal/mcp/wrapper.go`
+- [x] 11.4 Implement MCPManager in `internal/mcp/manager.go`
+- [x] 11.5 Implement config loading in `internal/mcp/config.go`
+- [x] 11.6 Write unit tests for MCP components
+- [x] 11.7 (PBT) Write property test for MCP tool interface compliance (Property 21)
+- [x] 11.8 Create example mcp.json configuration file

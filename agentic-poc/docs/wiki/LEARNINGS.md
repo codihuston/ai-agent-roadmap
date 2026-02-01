@@ -1375,3 +1375,275 @@ if state2.Phase != PhaseIdle {
 - **Specialized Agents**: Factory functions, system prompts, tool configuration, orchestrator integration
 - **CLI**: Dependency injection, mode separation, exit handling, intermediate step display
 - **Orchestrator**: State management, partial results, failure handling, mock provider design
+
+
+---
+
+## MCP Integration
+
+### Design Decision: MCPClient interface for provider abstraction
+
+**Context**: MCP (Model Context Protocol) enables connecting to external tool servers. Different transport mechanisms (stdio, HTTP, WebSocket) may be needed.
+
+**Decision**: Define a minimal interface for MCP client implementations:
+
+```go
+type MCPClient interface {
+    Connect(ctx context.Context) error
+    ListTools(ctx context.Context) ([]MCPToolInfo, error)
+    CallTool(ctx context.Context, name string, args map[string]interface{}) (*ToolResult, error)
+    Close() error
+}
+```
+
+**Rationale**:
+- Interface allows different transport implementations (stdio, HTTP)
+- `Connect` is separate from construction for explicit lifecycle management
+- `ListTools` enables dynamic tool discovery
+- `CallTool` matches the existing Tool interface pattern
+- `Close` ensures proper resource cleanup
+
+### Design Decision: StdioMCPClient for subprocess communication
+
+**Context**: Most MCP servers are designed to run as subprocesses communicating via stdin/stdout.
+
+**Decision**: Implement stdio transport using JSON-RPC 2.0:
+
+```go
+type StdioMCPClient struct {
+    command string
+    args    []string
+    env     map[string]string
+    cmd     *exec.Cmd
+    stdin   io.WriteCloser
+    stdout  *bufio.Reader
+}
+```
+
+**Rationale**:
+- Matches MCP specification for stdio transport
+- JSON-RPC 2.0 is the standard MCP protocol
+- Environment variables support server configuration (API keys, etc.)
+- Buffered reader handles line-delimited JSON messages
+
+### Challenge: MCP protocol initialization handshake
+
+**Context**: MCP requires an initialization handshake before tools can be used.
+
+**Problem**: The server won't respond to tool calls until properly initialized.
+
+**Solution**: Send `initialize` request followed by `notifications/initialized`:
+
+```go
+func (c *StdioMCPClient) initialize(ctx context.Context) error {
+    initParams := map[string]interface{}{
+        "protocolVersion": "2024-11-05",
+        "capabilities":    map[string]interface{}{},
+        "clientInfo": map[string]interface{}{
+            "name":    "agentic-poc",
+            "version": "1.0.0",
+        },
+    }
+    
+    resp, err := c.sendRequest(ctx, "initialize", initParams)
+    // ... handle response ...
+    
+    // Send initialized notification (no response expected)
+    notification := JSONRPCRequest{
+        JSONRPC: "2.0",
+        Method:  "notifications/initialized",
+    }
+    return c.writeMessage(notification)
+}
+```
+
+**Lesson**: MCP has a specific initialization sequence that must be followed exactly.
+
+### Design Decision: MCPToolWrapper adapts MCP tools to Tool interface
+
+**Context**: Agents use the `tool.Tool` interface, but MCP tools have different metadata format.
+
+**Decision**: Create a wrapper that implements Tool interface:
+
+```go
+type MCPToolWrapper struct {
+    client MCPClient
+    info   MCPToolInfo
+}
+
+func (w *MCPToolWrapper) Name() string        { return w.info.Name }
+func (w *MCPToolWrapper) Description() string { return w.info.Description }
+func (w *MCPToolWrapper) Parameters() map[string]interface{} { 
+    if w.info.InputSchema == nil {
+        return map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}
+    }
+    return w.info.InputSchema 
+}
+func (w *MCPToolWrapper) Execute(ctx context.Context, args map[string]interface{}) (*provider.ToolResult, error) {
+    return w.client.CallTool(ctx, w.info.Name, args)
+}
+```
+
+**Rationale**:
+- Seamless integration with existing agent code
+- Agents don't need to know if a tool is built-in or from MCP
+- Wrapper handles nil schema case with sensible default
+- Execute delegates directly to MCP client
+
+### Design Decision: MCPManager for multi-server coordination
+
+**Context**: A system may connect to multiple MCP servers, each providing different tools.
+
+**Decision**: Create a manager that handles multiple connections:
+
+```go
+type MCPManager struct {
+    clients map[string]MCPClient
+    tools   map[string]*MCPToolWrapper
+    mu      sync.RWMutex
+}
+```
+
+**Key features**:
+- Tool names are prefixed with server name (`filesystem/read_file`) to avoid collisions
+- Connection failures are isolated - one server failing doesn't affect others (Property 23)
+- Thread-safe access with RWMutex
+- Graceful shutdown closes all connections
+
+**Rationale**:
+- Supports multiple tool sources simultaneously
+- Isolation prevents cascading failures
+- Prefixed names make tool source clear in logs
+
+### Design Decision: JSON configuration file for MCP servers
+
+**Context**: MCP server configuration should be external to code.
+
+**Decision**: Use JSON config file matching common MCP client conventions:
+
+```json
+{
+  "mcpServers": {
+    "filesystem": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"],
+      "disabled": false,
+      "env": {"DEBUG": "true"},
+      "autoApprove": ["read_file"]
+    }
+  }
+}
+```
+
+**Rationale**:
+- Familiar format for users of other MCP clients
+- `disabled` flag allows temporarily disabling servers
+- `env` supports server-specific configuration
+- `autoApprove` prepared for future approval workflow
+- Validation ensures required fields are present
+
+### Challenge: Handling MCP tool result format
+
+**Context**: MCP tool results have a specific format with content blocks.
+
+**Problem**: Results come as `{"content": [{"type": "text", "text": "..."}], "isError": false}`.
+
+**Solution**: Extract text content from the result structure:
+
+```go
+func extractContent(resultMap map[string]interface{}) string {
+    contentRaw, ok := resultMap["content"]
+    if !ok {
+        return ""
+    }
+    
+    contentList, ok := contentRaw.([]interface{})
+    if !ok {
+        return fmt.Sprintf("%v", contentRaw)
+    }
+    
+    var result string
+    for _, item := range contentList {
+        itemMap, ok := item.(map[string]interface{})
+        if !ok {
+            continue
+        }
+        if text, ok := itemMap["text"].(string); ok {
+            if result != "" {
+                result += "\n"
+            }
+            result += text
+        }
+    }
+    return result
+}
+```
+
+**Lesson**: MCP results can have multiple content blocks; concatenate text blocks with newlines.
+
+### Testing Strategy: Mock MCPClient for unit tests
+
+**Context**: Testing MCP components without running actual MCP servers.
+
+**Decision**: Create a mock client with configurable behavior:
+
+```go
+type MockMCPClient struct {
+    ConnectFunc   func(ctx context.Context) error
+    ListToolsFunc func(ctx context.Context) ([]MCPToolInfo, error)
+    CallToolFunc  func(ctx context.Context, name string, args map[string]interface{}) (*provider.ToolResult, error)
+    CloseFunc     func() error
+}
+```
+
+**Rationale**:
+- Each method can be customized per test
+- Default implementations return sensible values
+- Can simulate connection failures, tool errors, etc.
+- Enables testing isolation behavior (Property 23)
+
+### Testing Strategy: Property-based tests for MCP tool interface
+
+**Context**: Property 21 requires MCP tools to correctly implement the Tool interface.
+
+**Decision**: Use gopter to verify interface compliance:
+
+```go
+properties.Property("MCPToolWrapper returns correct name from MCP metadata", prop.ForAll(
+    func(name string) bool {
+        client := NewMockMCPClient()
+        info := MCPToolInfo{Name: name, Description: "test"}
+        wrapper := NewMCPToolWrapper(client, info)
+        return wrapper.Name() == name
+    },
+    gen.AlphaString().SuchThat(func(s string) bool { return len(s) > 0 }),
+))
+```
+
+**Properties tested**:
+- Name is returned exactly as provided
+- Description is returned exactly as provided
+- Parameters always returns valid schema (never nil)
+- Nil schema returns default object schema
+- Tool calls forward name and arguments exactly
+- Results are returned unchanged
+
+**Rationale**:
+- Property tests catch edge cases (empty strings, special characters)
+- Verifies contract compliance across many inputs
+- Documents expected behavior formally
+
+---
+
+## Categories
+
+- **Parsing**: JSON serialization, nil vs empty handling, MCP result format
+- **Testing**: Property-based testing with gopter, generator design, mock HTTP servers, mock LLM providers, mock MCP clients, integration tests with temp directories, orchestrator mocking strategies
+- **LLM Providers**: Interface design, Claude API format, error handling
+- **Tool Calling**: Interface design, type conversion, security, plan capture, MCP tool wrapping
+- **Memory**: Thread safety, defensive copying, API design
+- **Agent Loop**: Think-Act-Observe pattern, error handling, iteration limits, memory management
+- **Specialized Agents**: Factory functions, system prompts, tool configuration, orchestrator integration
+- **CLI**: Dependency injection, mode separation, exit handling, intermediate step display
+- **Orchestrator**: State management, partial results, failure handling, mock provider design
+- **MCP Integration**: Client interface, stdio transport, tool wrapper, multi-server management, configuration

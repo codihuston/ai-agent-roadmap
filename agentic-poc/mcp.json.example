@@ -1,0 +1,26 @@
+{
+  "mcpServers": {
+    "filesystem": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp/workspace"],
+      "disabled": false,
+      "autoApprove": ["read_file", "list_directory"]
+    },
+    "web-search": {
+      "command": "python",
+      "args": ["-m", "mcp_server_web_search"],
+      "env": {
+        "SEARCH_API_KEY": "your-api-key-here"
+      },
+      "disabled": true
+    },
+    "github": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-github"],
+      "env": {
+        "GITHUB_TOKEN": "your-github-token-here"
+      },
+      "disabled": true
+    }
+  }
+}
