@@ -6,6 +6,8 @@ This document captures design decisions, challenges, and observations encountere
 
 1. [JSON Serialization](#json-serialization)
 2. [Property-Based Testing](#property-based-testing)
+3. [LLM Provider Abstraction](#llm-provider-abstraction)
+4. [Tool Interface and Implementations](#tool-interface-and-implementations)
 
 ---
 
@@ -84,3 +86,697 @@ func genNonEmptyAlphaString() gopter.Gen {
 
 - **Parsing**: JSON serialization, nil vs empty handling
 - **Testing**: Property-based testing with gopter, generator design
+
+
+---
+
+## LLM Provider Abstraction
+
+### Design Decision: Interface-based provider abstraction
+
+**Context**: The system needs to support multiple LLM providers (Claude, Gemini, OpenAI) without changing agent code.
+
+**Decision**: Define a minimal `LLMProvider` interface with two methods:
+
+```go
+type LLMProvider interface {
+    Generate(ctx context.Context, req GenerateRequest) (*LLMResponse, error)
+    Name() string
+}
+```
+
+**Rationale**: 
+- `Generate` is the core operation - send messages, get response
+- `Name` enables logging and debugging to identify which provider is in use
+- Keeping the interface small follows the Interface Segregation Principle
+
+### Design Decision: Functional options for provider configuration
+
+**Context**: ClaudeProvider needs configurable model, HTTP client, and base URL.
+
+**Decision**: Use functional options pattern instead of a config struct:
+
+```go
+provider, err := NewClaudeProviderWithKey("key",
+    WithModel("claude-3-opus"),
+    WithHTTPClient(customClient),
+    WithBaseURL("https://custom.api.com"),
+)
+```
+
+**Rationale**:
+- Optional parameters without requiring a config struct
+- Sensible defaults without nil checks
+- Easy to extend with new options
+- Clear, readable API at call sites
+
+### Challenge: Claude API message format conversion
+
+**Context**: Claude's API uses a different message format than our internal representation. Tool results must be sent as `tool_result` content blocks with `tool_use_id`.
+
+**Problem**: Our `Message` struct has `ToolCallID` and `ToolName` fields, but Claude expects these in a specific content block format.
+
+**Solution**: Convert messages during request building:
+
+```go
+func (c *ClaudeProvider) convertMessage(msg Message) (claudeMsg, error) {
+    // Handle tool result messages specially
+    if msg.ToolCallID != "" {
+        return claudeMsg{
+            Role: "user",  // Tool results are always "user" role in Claude
+            Content: []contentPart{{
+                Type:      "tool_result",
+                ToolUseID: msg.ToolCallID,
+                Content:   msg.Content,
+            }},
+        }, nil
+    }
+    // Regular text messages...
+}
+```
+
+**Lesson**: Keep internal message format simple and provider-agnostic; handle API-specific conversions in the provider implementation.
+
+### Challenge: Error wrapping with context
+
+**Context**: Requirement 1.3 states errors must be handled gracefully with descriptive messages.
+
+**Decision**: All errors are wrapped with `claude:` prefix and operation context:
+
+```go
+return nil, fmt.Errorf("claude: failed to send request: %w", err)
+return nil, fmt.Errorf("claude: authentication failed: %s", errResp.Error.Message)
+```
+
+**Rationale**:
+- Errors clearly identify which provider failed
+- Original error is preserved with `%w` for unwrapping
+- HTTP status codes are translated to meaningful messages (401 → "authentication failed")
+
+### Testing Strategy: Mock HTTP server
+
+**Context**: Testing the provider without making real API calls.
+
+**Decision**: Use `httptest.NewServer` to create mock servers that return controlled responses:
+
+```go
+server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+    // Verify headers, return mock response
+}))
+defer server.Close()
+
+provider, _ := NewClaudeProviderWithKey("key", WithBaseURL(server.URL))
+```
+
+**Benefits**:
+- Tests run fast without network calls
+- Can test error scenarios (rate limits, auth failures)
+- Can verify request format (headers, body structure)
+- No API key required for testing
+
+---
+
+## Tool Interface and Implementations
+
+### Design Decision: Tool interface with ToolResult from provider package
+
+**Context**: Tools need to return results that can be sent back to the LLM. The `ToolResult` type was already defined in `internal/provider/types.go`.
+
+**Decision**: Import `ToolResult` from the provider package rather than defining a duplicate:
+
+```go
+type Tool interface {
+    Name() string
+    Description() string
+    Parameters() map[string]interface{}
+    Execute(ctx context.Context, args map[string]interface{}) (*provider.ToolResult, error)
+}
+```
+
+**Rationale**:
+- Avoids type duplication and conversion overhead
+- `ToolResult` is already designed for LLM communication
+- Single source of truth for the result structure
+
+### Design Decision: Helper functions for Tool to ToolDefinition conversion
+
+**Context**: Agents need to pass tool definitions to the LLM provider.
+
+**Decision**: Provide `ToDefinition` and `ToDefinitions` helper functions:
+
+```go
+func ToDefinition(t Tool) provider.ToolDefinition
+func ToDefinitions(tools []Tool) []provider.ToolDefinition
+```
+
+**Rationale**:
+- Keeps conversion logic in one place
+- Agents don't need to know about ToolDefinition structure
+- Easy to extend if conversion logic changes
+
+### Challenge: Type conversion for numeric arguments
+
+**Context**: JSON unmarshaling produces `float64` for all numbers, but callers might pass `int` or `int64`.
+
+**Problem**: Calculator tool receives arguments from JSON parsing (always `float64`) or direct Go calls (might be `int`).
+
+**Solution**: Create a `toFloat64` helper that handles multiple numeric types:
+
+```go
+func toFloat64(v interface{}) (float64, error) {
+    switch n := v.(type) {
+    case float64:
+        return n, nil
+    case int:
+        return float64(n), nil
+    case int64:
+        return float64(n), nil
+    default:
+        return 0, fmt.Errorf("expected number, got %T", v)
+    }
+}
+```
+
+**Lesson**: Always handle type flexibility when dealing with `interface{}` arguments from JSON.
+
+### Design Decision: Security for file tools with basePath
+
+**Context**: FileReaderTool and FileWriterTool need to prevent directory traversal attacks.
+
+**Decision**: All file paths are resolved relative to a `basePath` and validated:
+
+```go
+// Clean the path to prevent directory traversal attacks
+fullPath = filepath.Clean(fullPath)
+
+// Verify the path is still within basePath
+rel, err := filepath.Rel(absBase, absPath)
+if err != nil || len(rel) > 0 && rel[0] == '.' {
+    return &provider.ToolResult{
+        Success: false,
+        Error:   "path escapes base directory",
+    }, nil
+}
+```
+
+**Rationale**:
+- Prevents `../../../etc/passwd` style attacks
+- Tools can only access files within their designated workspace
+- Security is enforced at the tool level, not relying on callers
+
+### Design Decision: FinishPlanTool captures plan for orchestrator
+
+**Context**: The Architect agent needs to output a plan that the orchestrator can retrieve.
+
+**Decision**: FinishPlanTool stores the captured plan internally with thread-safe access:
+
+```go
+type FinishPlanTool struct {
+    capturedPlan string
+    mu           sync.RWMutex
+}
+
+func (f *FinishPlanTool) GetCapturedPlan() string
+func (f *FinishPlanTool) ClearCapturedPlan()
+func (f *FinishPlanTool) HasCapturedPlan() bool
+```
+
+**Rationale**:
+- Orchestrator creates the tool, passes it to Architect, then retrieves the plan
+- Thread-safe for potential concurrent access
+- Clear separation: tool captures, orchestrator retrieves
+
+### Testing Strategy: Property-based tests for Calculator
+
+**Context**: Property 7 requires mathematical correctness for all valid operations.
+
+**Decision**: Use gopter to test mathematical properties:
+
+```go
+// Property: Addition produces mathematically correct results
+properties.Property("add returns a + b", prop.ForAll(
+    func(a, b float64) bool {
+        result, _ := calc.Execute(ctx, args)
+        got, _ := strconv.ParseFloat(result.Output, 64)
+        return floatEquals(got, a+b)
+    },
+    genFiniteFloat(),
+    genFiniteFloat(),
+))
+```
+
+**Key decisions**:
+- Filter out NaN and Inf values (not valid calculator inputs)
+- Use relative tolerance for float comparison
+- Test commutativity as an additional mathematical property
+- Explicitly test division by zero returns error
+
+---
+
+## Conversation Memory
+
+### Design Decision: Thread-safe ConversationMemory with sync.RWMutex
+
+**Context**: ConversationMemory maintains conversation history that may be accessed concurrently by multiple goroutines (e.g., agent loop and monitoring).
+
+**Decision**: Use `sync.RWMutex` for thread-safe access:
+
+```go
+type ConversationMemory struct {
+    messages []provider.Message
+    mu       sync.RWMutex
+}
+```
+
+**Rationale**:
+- `RWMutex` allows multiple concurrent readers (GetMessages, Len)
+- Writers (AddMessage, AddToolResult, Clear) get exclusive access
+- Better performance than `Mutex` for read-heavy workloads
+
+### Design Decision: GetMessages returns a copy
+
+**Context**: Callers might modify the returned slice, which could corrupt internal state.
+
+**Decision**: Always return a copy of the messages slice:
+
+```go
+func (m *ConversationMemory) GetMessages() []provider.Message {
+    m.mu.RLock()
+    defer m.mu.RUnlock()
+    
+    result := make([]provider.Message, len(m.messages))
+    copy(result, m.messages)
+    return result
+}
+```
+
+**Rationale**:
+- Prevents external modification of internal state
+- Callers can safely modify the returned slice
+- Small memory overhead is acceptable for safety
+
+### Design Decision: Separate AddMessage and AddToolResult methods
+
+**Context**: Tool results have additional metadata (ToolCallID, ToolName) that regular messages don't have.
+
+**Decision**: Provide two separate methods instead of one generic method:
+
+```go
+func (m *ConversationMemory) AddMessage(role, content string)
+func (m *ConversationMemory) AddToolResult(toolCallID, toolName, result string)
+```
+
+**Rationale**:
+- Clear API - callers know exactly what parameters are needed
+- AddToolResult automatically sets Role to "tool"
+- Prevents errors from forgetting to set tool-specific fields
+- Type-safe at compile time
+
+### Testing Strategy: Property-based tests for ordering preservation
+
+**Context**: Property 1 requires that messages are returned in the exact order they were added.
+
+**Decision**: Test multiple scenarios with gopter:
+
+1. **Message ordering**: Add sequence of messages, verify order preserved
+2. **Content preservation**: Verify exact byte-for-byte content match
+3. **Tool result ordering**: Same as messages but for tool results
+4. **Mixed ordering**: Interleaved messages and tool results
+5. **Clear resets**: Verify Clear() removes all messages
+6. **Copy isolation**: Verify GetMessages() returns independent copy
+
+**Key insight**: Testing with random sequences catches edge cases that example-based tests miss (e.g., empty strings, special characters, very long sequences).
+
+---
+
+## Categories
+
+- **Parsing**: JSON serialization, nil vs empty handling
+- **Testing**: Property-based testing with gopter, generator design, mock HTTP servers
+- **LLM Providers**: Interface design, Claude API format, error handling
+- **Tool Calling**: Interface design, type conversion, security, plan capture
+- **Memory**: Thread safety, defensive copying, API design
+
+
+---
+
+## Agent Core Loop
+
+### Design Decision: Agent struct with tool map for O(1) lookup
+
+**Context**: The agent needs to dispatch tool calls to the correct tool implementation quickly.
+
+**Decision**: Store tools in a `map[string]tool.Tool` keyed by tool name:
+
+```go
+type Agent struct {
+    provider      provider.LLMProvider
+    tools         map[string]tool.Tool
+    systemPrompt  string
+    maxIterations int
+}
+```
+
+**Rationale**:
+- O(1) lookup by tool name during execution
+- Easy to check if a tool exists
+- Simple to add/remove tools dynamically with RegisterTool()
+
+### Design Decision: AgentConfig struct for constructor
+
+**Context**: Agent has multiple configuration options (provider, tools, system prompt, max iterations).
+
+**Decision**: Use a config struct instead of multiple constructor parameters:
+
+```go
+type AgentConfig struct {
+    Provider      provider.LLMProvider
+    Tools         []tool.Tool
+    SystemPrompt  string
+    MaxIterations int
+}
+
+func NewAgent(cfg AgentConfig) *Agent
+```
+
+**Rationale**:
+- Clear, self-documenting API
+- Easy to add new configuration options without breaking existing code
+- Optional fields have natural zero values (empty string, 0)
+- Default MaxIterations (10) applied when not set
+
+### Design Decision: Sentinel error for max iterations
+
+**Context**: Callers need to distinguish "max iterations exceeded" from other errors.
+
+**Decision**: Define a sentinel error that can be checked with `errors.Is`:
+
+```go
+var ErrMaxIterationsExceeded = errors.New("max iterations exceeded")
+
+// In Run():
+return nil, fmt.Errorf("%w: reached %d iterations without final response", 
+    ErrMaxIterationsExceeded, a.maxIterations)
+```
+
+**Rationale**:
+- Callers can use `errors.Is(err, ErrMaxIterationsExceeded)` for specific handling
+- Error message includes context (iteration count)
+- Follows Go error handling best practices
+
+### Design Decision: Tool errors don't crash the agent
+
+**Context**: Property 9 requires that tool execution errors don't crash the system.
+
+**Decision**: executeTool returns error messages as strings, never panics:
+
+```go
+func (a *Agent) executeTool(ctx context.Context, tc provider.ToolCall) string {
+    t, exists := a.tools[tc.Name]
+    if !exists {
+        return fmt.Sprintf("error: unknown tool '%s'", tc.Name)
+    }
+
+    result, err := t.Execute(ctx, tc.Arguments)
+    if err != nil {
+        return fmt.Sprintf("error: tool execution failed: %v", err)
+    }
+
+    if !result.Success {
+        return fmt.Sprintf("error: %s", result.Error)
+    }
+
+    return result.Output
+}
+```
+
+**Rationale**:
+- Agent continues operation even when tools fail
+- LLM receives error information and can decide how to proceed
+- Three error cases handled: unknown tool, execution error, result failure
+- Consistent error message format for LLM parsing
+
+### Design Decision: Track all tool calls in AgentResult
+
+**Context**: Callers may want to know what tools were used during a run.
+
+**Decision**: AgentResult includes all tool calls made:
+
+```go
+type AgentResult struct {
+    Response      string
+    ToolCallsMade []provider.ToolCall
+    Iterations    int
+}
+```
+
+**Rationale**:
+- Enables observability and debugging
+- Useful for logging and auditing
+- Supports Property 14 (Coder returns action summary)
+
+### Challenge: Memory management across iterations
+
+**Context**: The agent loop modifies conversation memory across multiple iterations.
+
+**Problem**: Need to ensure memory is updated correctly for both tool results and final responses.
+
+**Solution**: 
+1. Add user input at the start of Run()
+2. Add tool results after each tool execution
+3. Add assistant response only when loop terminates with final response
+
+```go
+// Start of Run()
+mem.AddMessage("user", input)
+
+// After tool execution
+mem.AddToolResult(tc.ID, tc.Name, result)
+
+// On final response (no tool calls)
+mem.AddMessage("assistant", resp.Text)
+```
+
+**Lesson**: Be explicit about when memory is modified to avoid duplicate or missing messages.
+
+### Testing Strategy: Mock LLM provider for deterministic tests
+
+**Context**: Testing the agent loop requires controlling LLM responses.
+
+**Decision**: Create a mockLLMProvider that returns predefined responses:
+
+```go
+type mockLLMProvider struct {
+    responses []provider.LLMResponse
+    errors    []error
+    callCount int
+    requests  []provider.GenerateRequest
+}
+```
+
+**Key features**:
+- `responses`: Sequence of responses to return
+- `errors`: Sequence of errors to return (nil for success)
+- `callCount`: Track how many times Generate was called
+- `requests`: Capture all requests for verification
+
+**Benefits**:
+- Deterministic tests - same input always produces same output
+- Can test error scenarios
+- Can verify request contents (messages, tools, system prompt)
+- Can test multi-iteration scenarios by providing multiple responses
+
+### Testing Strategy: Property-based tests for loop termination
+
+**Context**: Properties 10, 11, 12 define loop termination behavior.
+
+**Decision**: Use gopter to test with generated scenarios:
+
+1. **Property 10** (continues while tool calls exist):
+   - Generate random number of tool call rounds (0-8)
+   - Verify agent makes correct number of LLM calls
+   - Verify tool is called correct number of times
+
+2. **Property 11** (terminates on final response):
+   - Generate random response text
+   - Verify only one LLM call made
+   - Verify response matches exactly
+
+3. **Property 12** (max iterations error):
+   - Generate random max iterations (1-15)
+   - Always return tool calls (never final response)
+   - Verify ErrMaxIterationsExceeded returned
+   - Verify exact number of iterations made
+
+**Key insight**: Property tests catch edge cases like:
+- Zero tool call rounds (immediate final response)
+- Single iteration max (fails immediately)
+- Empty response text
+
+---
+
+## Specialized Agents
+
+### Design Decision: Factory functions for specialized agents
+
+**Context**: The system needs Architect and Coder agents with different configurations (tools, system prompts).
+
+**Decision**: Create factory functions that return pre-configured agents:
+
+```go
+func NewArchitectAgent(provider LLMProvider) (*Agent, *FinishPlanTool)
+func NewCoderAgent(provider LLMProvider, basePath string) *Agent
+```
+
+**Rationale**:
+- Encapsulates agent configuration in one place
+- Callers don't need to know which tools each agent needs
+- System prompts are defined as constants for easy review/modification
+- Architect returns the FinishPlanTool so orchestrator can retrieve captured plans
+
+### Design Decision: Architect returns FinishPlanTool reference
+
+**Context**: The orchestrator needs to retrieve the plan captured by the Architect agent.
+
+**Decision**: NewArchitectAgent returns both the agent and the FinishPlanTool:
+
+```go
+func NewArchitectAgent(provider LLMProvider) (*Agent, *FinishPlanTool) {
+    finishPlanTool := tool.NewFinishPlanTool()
+    agent := NewAgent(AgentConfig{
+        Provider: provider,
+        Tools:    []tool.Tool{finishPlanTool},
+        // ...
+    })
+    return agent, finishPlanTool
+}
+```
+
+**Rationale**:
+- Orchestrator creates the agent and keeps reference to the tool
+- After agent runs, orchestrator calls `finishPlanTool.GetCapturedPlan()`
+- Clean separation of concerns - agent doesn't know about orchestrator
+- Tool is created fresh each time, avoiding state leakage between runs
+
+### Design Decision: Coder agent takes basePath parameter
+
+**Context**: The Coder agent needs to read/write files within a specific workspace.
+
+**Decision**: basePath is a required parameter for NewCoderAgent:
+
+```go
+func NewCoderAgent(provider LLMProvider, basePath string) *Agent
+```
+
+**Rationale**:
+- Security: all file operations are sandboxed to basePath
+- Flexibility: different Coder instances can work in different directories
+- Explicit: caller must think about where files will be created
+- Consistent with FileReaderTool and FileWriterTool design
+
+### Design Decision: Detailed system prompts with clear instructions
+
+**Context**: LLMs need clear instructions to behave as expected.
+
+**Decision**: System prompts include:
+1. Role description (who the agent is)
+2. Responsibilities (what it should do)
+3. Available tools and their usage
+4. Guidelines for behavior
+5. Expected output format
+
+**Example (Architect)**:
+```go
+const ArchitectSystemPrompt = `You are an Architect agent responsible for breaking down high-level goals into detailed implementation plans.
+
+Your role is to:
+1. Analyze the user's goal...
+2. Break down the goal into clear, actionable steps...
+...
+
+When you have completed your plan, you MUST call the finish_plan tool with:
+- goal: The original goal being addressed
+- steps: An array of steps...
+
+Guidelines for creating plans:
+- Be specific and detailed...
+...
+
+Always call finish_plan when your plan is complete. Do not provide the plan as text - use the tool.`
+```
+
+**Rationale**:
+- Clear instructions reduce LLM confusion
+- Explicit tool usage requirements ensure consistent behavior
+- Guidelines help produce higher quality output
+- "MUST" language emphasizes required behavior
+
+### Testing Strategy: Integration-style tests with real file operations
+
+**Context**: Coder agent tests need to verify actual file operations.
+
+**Decision**: Use temporary directories for realistic testing:
+
+```go
+func TestCoderAgent_ExecutesWriteFile(t *testing.T) {
+    tmpDir, err := os.MkdirTemp("", "coder_test")
+    if err != nil {
+        t.Fatalf("failed to create temp dir: %v", err)
+    }
+    defer os.RemoveAll(tmpDir)
+
+    // ... test with real file operations ...
+    
+    // Verify file was actually created
+    content, err := os.ReadFile(filepath.Join(tmpDir, "hello.txt"))
+    // ...
+}
+```
+
+**Rationale**:
+- Tests verify actual behavior, not just mock interactions
+- Catches real issues (permissions, path handling, directory creation)
+- Cleanup with `defer os.RemoveAll` ensures no test artifacts remain
+- More confidence that code works in production
+
+### Testing Strategy: Table-driven tests for agent configuration
+
+**Context**: Need to verify agent configuration is correct.
+
+**Decision**: Use simple verification tests for factory functions:
+
+```go
+func TestNewArchitectAgent(t *testing.T) {
+    agent, finishPlanTool := NewArchitectAgent(mockProvider)
+    
+    // Verify agent is created
+    if agent == nil { t.Fatal("expected agent") }
+    
+    // Verify tool is returned
+    if finishPlanTool == nil { t.Fatal("expected tool") }
+    
+    // Verify system prompt
+    if agent.systemPrompt != ArchitectSystemPrompt { t.Error("wrong prompt") }
+    
+    // Verify tools registered
+    tools := agent.GetTools()
+    // ...
+}
+```
+
+**Rationale**:
+- Quick verification that factory functions work correctly
+- Catches configuration errors early
+- Documents expected behavior
+
+---
+
+## Categories
+
+- **Parsing**: JSON serialization, nil vs empty handling
+- **Testing**: Property-based testing with gopter, generator design, mock HTTP servers, mock LLM providers, integration tests with temp directories
+- **LLM Providers**: Interface design, Claude API format, error handling
+- **Tool Calling**: Interface design, type conversion, security, plan capture
+- **Memory**: Thread safety, defensive copying, API design
+- **Agent Loop**: Think-Act-Observe pattern, error handling, iteration limits, memory management
+- **Specialized Agents**: Factory functions, system prompts, tool configuration, orchestrator integration
