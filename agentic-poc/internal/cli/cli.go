@@ -103,18 +103,21 @@ func (c *CLI) RunSingleAgentMode() error {
 		tool.NewFileReaderTool(c.basePath),
 	}
 
-	// Create the agent
+	// Create the agent with a clear system prompt
 	agentInstance := agent.NewAgent(agent.AgentConfig{
-		Provider:      c.provider,
-		Tools:         tools,
-		SystemPrompt:  "You are a helpful assistant with access to a calculator and file reader. Use these tools to help the user.",
+		Provider: c.provider,
+		Tools:    tools,
+		SystemPrompt: `You are a helpful assistant with access to two tools:
+1. calculator - Use this for ANY math operations (add, subtract, multiply, divide). Always use the calculator tool for arithmetic.
+2. read_file - Use this to read file contents when asked about files.
+
+When the user asks a math question, use the calculator tool. Do not try to calculate in your head.
+When the user asks to read a file, use the read_file tool.
+Keep responses concise and helpful.`,
 		MaxIterations: 10,
 	})
 
-	// Create conversation memory
-	mem := memory.NewConversationMemory()
-
-	// Interactive loop
+	// Interactive loop - fresh memory for each prompt
 	for {
 		c.printf("You: ")
 
@@ -137,6 +140,9 @@ func (c *CLI) RunSingleAgentMode() error {
 			c.println("Goodbye!")
 			return nil
 		}
+
+		// Create fresh memory for each prompt to avoid token accumulation
+		mem := memory.NewConversationMemory()
 
 		// Run the agent
 		ctx := context.Background()
