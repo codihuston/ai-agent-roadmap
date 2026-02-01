@@ -1286,3 +1286,1267 @@ Real systems often combine patterns:
 - **Perplexity**: Router (query type) → Map-Reduce (search) → Supervisor (synthesize)
 
 Start simple (sequential or reflection), add complexity only when needed.
+
+
+---
+
+## Underaddressed Problem Spaces in Agentic AI
+
+These are gaps in the current ecosystem - problems that aren't well-solved yet, with analysis of what's in your control vs outside your domain.
+
+### 1. Long-Running Task Reliability
+
+**The Problem**: Agents fail mid-task. Network drops, LLM rate limits, tool errors. For a 30-minute autonomous task, failure probability compounds.
+
+| Scale | Challenge |
+|-------|-----------|
+| Single request | Retry logic, timeout handling |
+| Multi-step task | Checkpointing, resume from failure |
+| Hours-long workflow | State persistence, partial rollback |
+| Days/weeks | Human handoff, progress reporting |
+
+**What You Can Control**:
+- Checkpointing between steps (save state to disk/DB)
+- Idempotent tool operations (safe to retry)
+- Graceful degradation (partial results > no results)
+- Progress persistence and resume logic
+
+**Outside Your Domain**:
+- LLM API reliability (you can only retry/failover)
+- Network stability
+- Rate limit policies
+
+**Approach**: Build a task state machine with persistent checkpoints. Every tool call should be resumable. Think of it like a database transaction log.
+
+```go
+type TaskCheckpoint struct {
+    TaskID      string
+    Step        int
+    State       map[string]interface{}
+    Completed   []string  // completed tool calls
+    Pending     []string  // remaining work
+    CreatedAt   time.Time
+}
+```
+
+---
+
+### 2. Cost Predictability & Budgeting
+
+**The Problem**: Token costs are unpredictable. A "simple" task might spiral into 50 LLM calls. Users/businesses need cost guarantees.
+
+| Scale | Challenge |
+|-------|-----------|
+| Single query | Estimate before execution |
+| Session | Budget caps per conversation |
+| User/tenant | Monthly quotas, alerts |
+| Enterprise | Chargeback, cost allocation |
+
+**What You Can Control**:
+- Pre-flight cost estimation (count tokens before sending)
+- Hard budget limits with circuit breakers
+- Cost-aware routing (cheaper model for simple tasks)
+- Caching identical/similar requests
+- Prompt optimization (shorter = cheaper)
+
+**Outside Your Domain**:
+- API pricing changes
+- Token counting accuracy (varies by model)
+- Quality vs cost tradeoff (cheaper models = worse results)
+
+**Approach**: Build a cost governor into your orchestrator.
+
+```go
+type CostGovernor struct {
+    BudgetRemaining float64
+    EstimatedCost   func(req GenerateRequest) float64
+    OnBudgetLow     func(remaining float64)
+}
+
+func (g *CostGovernor) CanProceed(req GenerateRequest) bool {
+    estimated := g.EstimatedCost(req)
+    return estimated < g.BudgetRemaining
+}
+```
+
+---
+
+### 3. Determinism & Reproducibility
+
+**The Problem**: Same input → different output. Makes testing, debugging, and auditing nearly impossible.
+
+| Scale | Challenge |
+|-------|-----------|
+| Development | Can't write reliable tests |
+| Debugging | Can't reproduce user issues |
+| Compliance | Can't prove what happened |
+| Legal/audit | Need exact replay capability |
+
+**What You Can Control**:
+- Seed parameters (where supported)
+- Temperature = 0 (reduces but doesn't eliminate variance)
+- Full request/response logging
+- Snapshot exact prompts and context
+- Version control system prompts
+
+**Outside Your Domain**:
+- LLM internal randomness
+- Model updates/changes by provider
+- Non-deterministic tool outputs (live APIs, time-based data)
+
+**Approach**: Accept non-determinism, design around it.
+
+- Log everything needed to understand decisions (not reproduce exactly)
+- Test behavior ranges, not exact outputs
+- Use property-based tests for invariants
+- Build "close enough" comparison for outputs
+
+---
+
+### 4. Multi-Tenant Isolation & Security
+
+**The Problem**: Agents have real power (file access, API calls, code execution). In multi-tenant systems, one user's agent shouldn't affect another's.
+
+| Scale | Challenge |
+|-------|-----------|
+| Single user | Sandbox tool execution |
+| Multi-user | Isolate contexts, prevent data leakage |
+| Enterprise | Tenant-specific tools, permissions |
+| Platform | Malicious prompt injection across tenants |
+
+**What You Can Control**:
+- Tool permission scoping per user/tenant
+- Sandboxed execution environments (containers, VMs)
+- Context isolation (separate memory per tenant)
+- Input sanitization before tool execution
+- Output filtering before returning to user
+
+**Outside Your Domain**:
+- LLM-level prompt injection vulnerabilities
+- Zero-day exploits in sandbox tech
+- Provider-side data handling
+
+**Approach**: Defense in depth.
+
+```go
+type TenantContext struct {
+    TenantID    string
+    Permissions []Permission
+    Sandbox     SandboxConfig
+    Tools       []Tool  // tenant-specific tool subset
+}
+
+func (t *Tool) Execute(ctx TenantContext, args map[string]interface{}) (Result, error) {
+    if !ctx.HasPermission(t.RequiredPermission) {
+        return Result{}, ErrPermissionDenied
+    }
+    // Execute in isolated sandbox
+    return t.sandbox.Run(ctx.Sandbox, args)
+}
+```
+
+---
+
+### 5. Human-in-the-Loop at Scale
+
+**The Problem**: Fully autonomous agents make mistakes. Humans need to intervene, but intervention doesn't scale.
+
+| Scale | Challenge |
+|-------|-----------|
+| Single task | Simple approve/reject |
+| Batch tasks | Prioritize which need review |
+| High volume | Sample-based review, escalation rules |
+| Enterprise | Workflow integration, SLAs |
+
+**What You Can Control**:
+- Confidence scoring (low confidence → human review)
+- Escalation rules (certain actions always need approval)
+- Async approval workflows
+- Batch review interfaces
+- Audit trails for accountability
+
+**Outside Your Domain**:
+- Human availability and response time
+- Organizational approval processes
+- Regulatory requirements for human oversight
+
+**Approach**: Build confidence-based escalation.
+
+```go
+type EscalationPolicy struct {
+    AlwaysEscalate  []string  // tool names that always need approval
+    ConfidenceThreshold float64
+    MaxAutoApprovals    int    // after N auto-approvals, force human review
+}
+
+func (p *EscalationPolicy) NeedsHumanReview(action ToolCall, confidence float64) bool {
+    if slices.Contains(p.AlwaysEscalate, action.Name) {
+        return true
+    }
+    return confidence < p.ConfidenceThreshold
+}
+```
+
+---
+
+### 6. Observability for Non-Deterministic Systems
+
+**The Problem**: Traditional observability assumes deterministic systems. "Request X always produces Y." Agents don't work that way.
+
+| Scale | Challenge |
+|-------|-----------|
+| Single request | Why did it choose that tool? |
+| Session | Why did behavior change mid-conversation? |
+| Aggregate | What's "normal" when every request is different? |
+| Debugging | Reproduce and understand failures |
+
+**What You Can Control**:
+- Decision logging (what options, why chosen)
+- Context snapshots at each step
+- Tool call traces with full arguments
+- LLM response logging (with PII scrubbing)
+- Anomaly detection on behavioral patterns
+
+**Outside Your Domain**:
+- LLM internal reasoning (black box)
+- Why the model "changed its mind"
+- Explaining emergent multi-agent behavior
+
+**Approach**: Log decisions, not just actions.
+
+```go
+type DecisionLog struct {
+    Timestamp   time.Time
+    Context     string   // summarized context
+    Options     []string // what tools/actions were available
+    Chosen      string   // what was selected
+    Confidence  float64  // if available
+    Reasoning   string   // LLM's stated reasoning (if using CoT)
+}
+```
+
+---
+
+### 7. Graceful Degradation & Fallbacks
+
+**The Problem**: When the primary LLM fails or is slow, what happens? Most systems just error out.
+
+| Scale | Challenge |
+|-------|-----------|
+| Single failure | Retry with backoff |
+| Provider outage | Failover to alternate provider |
+| Degraded quality | Use cheaper/faster model as fallback |
+| Complete failure | Meaningful error to user |
+
+**What You Can Control**:
+- Multi-provider support (Claude, GPT, local models)
+- Automatic failover logic
+- Quality-aware routing (try best model first, fall back)
+- Cached responses for common queries
+- Graceful error messages
+
+**Outside Your Domain**:
+- Provider availability
+- Model quality differences
+- API compatibility across providers
+
+**Approach**: Provider abstraction with fallback chain.
+
+```go
+type FallbackChain struct {
+    Providers []LLMProvider  // ordered by preference
+    Timeout   time.Duration
+}
+
+func (f *FallbackChain) Generate(ctx context.Context, req GenerateRequest) (*LLMResponse, error) {
+    var lastErr error
+    for _, provider := range f.Providers {
+        ctx, cancel := context.WithTimeout(ctx, f.Timeout)
+        resp, err := provider.Generate(ctx, req)
+        cancel()
+        if err == nil {
+            return resp, nil
+        }
+        lastErr = err
+        log.Warn("provider failed, trying next", "provider", provider.Name(), "error", err)
+    }
+    return nil, fmt.Errorf("all providers failed: %w", lastErr)
+}
+```
+
+---
+
+### 8. Context Window Management
+
+**The Problem**: Context windows are finite. Long conversations, large codebases, extensive tool outputs - they all compete for limited space.
+
+| Scale | Challenge |
+|-------|-----------|
+| Single conversation | Fit history in window |
+| Large documents | Chunk and retrieve relevant parts |
+| Codebase-wide | Can't fit entire repo in context |
+| Multi-session | Maintain continuity across sessions |
+
+**What You Can Control**:
+- Smart summarization of old context
+- RAG for selective retrieval
+- Chunking strategies for large inputs
+- Priority-based context inclusion
+- Token budgeting across context components
+
+**Outside Your Domain**:
+- Context window size limits
+- Quality degradation with summarization
+- Retrieval accuracy
+
+**Approach**: Context budget allocation.
+
+```go
+type ContextBudget struct {
+    TotalTokens     int
+    SystemPrompt    int  // reserved
+    RecentHistory   int  // reserved for last N messages
+    RetrievedContext int // for RAG results
+    CurrentInput    int  // user's current message
+}
+
+func (b *ContextBudget) Allocate(components []ContextComponent) []ContextComponent {
+    // Prioritize: system > current input > recent > retrieved
+    // Truncate lower priority items if over budget
+}
+```
+
+---
+
+### 9. Evaluation & Quality Measurement
+
+**The Problem**: How do you know if your agent is "good"? Traditional metrics don't apply. User satisfaction is subjective and delayed.
+
+| Scale | Challenge |
+|-------|-----------|
+| Single response | Was this helpful? |
+| Task completion | Did it achieve the goal? |
+| Aggregate quality | Is the system improving over time? |
+| Comparison | Is prompt A better than prompt B? |
+
+**What You Can Control**:
+- Task completion tracking (did tool calls succeed?)
+- User feedback collection (thumbs up/down, ratings)
+- A/B testing infrastructure
+- Golden test suites for regression
+- LLM-as-judge for automated evaluation
+
+**Outside Your Domain**:
+- Subjective quality perception
+- Long-term impact measurement
+- Ground truth for open-ended tasks
+
+**Approach**: Multi-signal quality tracking.
+
+```go
+type QualitySignals struct {
+    TaskCompleted    bool
+    ToolCallsSucceeded int
+    ToolCallsFailed    int
+    Iterations       int
+    UserRating       *int     // nil if not provided
+    LLMJudgeScore    *float64 // automated evaluation
+    Latency          time.Duration
+    TokensUsed       int
+}
+```
+
+---
+
+### 10. Agent Identity & Continuity
+
+**The Problem**: Agents are stateless by default. Each conversation starts fresh. Users expect continuity - "remember what we discussed yesterday."
+
+| Scale | Challenge |
+|-------|-----------|
+| Single session | Maintain context within conversation |
+| Cross-session | Remember user preferences, past decisions |
+| Long-term | Build up knowledge about user/project |
+| Multi-agent | Share relevant context between agents |
+
+**What You Can Control**:
+- User profile storage (preferences, history)
+- Project-level memory (decisions, context)
+- Cross-session retrieval (RAG on past conversations)
+- Agent "personality" persistence
+
+**Outside Your Domain**:
+- True understanding/memory (it's retrieval, not memory)
+- Privacy regulations on data retention
+- Storage costs at scale
+
+**Approach**: Layered memory with explicit persistence.
+
+```go
+type AgentMemory struct {
+    Session    *ConversationMemory  // current conversation
+    User       *UserProfile         // preferences, history
+    Project    *ProjectContext      // decisions, codebase knowledge
+    Global     *KnowledgeBase       // shared across all users
+}
+
+func (m *AgentMemory) GetRelevantContext(query string) []Message {
+    // Combine from all layers, prioritize by relevance
+}
+```
+
+---
+
+### Summary: What's In Your Control
+
+| Problem Space | Your Control | Outside Domain |
+|---------------|--------------|----------------|
+| Long-running reliability | Checkpointing, retry, idempotency | LLM/network reliability |
+| Cost predictability | Budgets, estimation, caching | API pricing |
+| Determinism | Logging, testing strategies | LLM randomness |
+| Multi-tenant security | Sandboxing, permissions | LLM vulnerabilities |
+| Human-in-the-loop | Escalation rules, workflows | Human availability |
+| Observability | Decision logging, tracing | LLM reasoning |
+| Graceful degradation | Fallbacks, multi-provider | Provider availability |
+| Context management | Summarization, RAG, budgeting | Window size limits |
+| Quality measurement | Metrics, A/B testing, feedback | Subjective quality |
+| Agent continuity | Persistent memory, retrieval | True understanding |
+
+**The pattern**: You control the plumbing, orchestration, and data flow. The LLM itself is a black box you work around, not through.
+
+Focus your engineering effort on the "Your Control" column - that's where you can differentiate and add value.
+
+
+---
+
+## Emerging CS Fundamentals for Agentic Systems
+
+Classic computer science concepts are being adapted and new patterns are emerging specifically for agentic AI. These are becoming foundational knowledge for building robust agent systems.
+
+### Data Structures
+
+#### 1. Vector Indexes (ANN - Approximate Nearest Neighbor)
+
+Not new, but now essential infrastructure. Powers semantic search and RAG.
+
+```
+Query: "How do I deploy to production?"
+         │
+         ▼ Embed
+    [0.12, -0.34, 0.56, ...]
+         │
+         ▼ ANN Search
+    ┌─────────────────────────────────────┐
+    │  Vector Index (HNSW, IVF, etc.)     │
+    │  ┌───┐ ┌───┐ ┌───┐ ┌───┐ ┌───┐    │
+    │  │ • │─│ • │─│ • │─│ • │─│ • │    │
+    │  └───┘ └───┘ └─┬─┘ └───┘ └───┘    │
+    │                │ ← nearest         │
+    └────────────────┼───────────────────┘
+                     ▼
+    "Deployment docs section 3.2..."
+```
+
+**Key Algorithms**:
+- **HNSW (Hierarchical Navigable Small World)**: Multi-layer graph, O(log n) search. Best general-purpose.
+- **IVF (Inverted File Index)**: Cluster-based, good for very large datasets.
+- **PQ (Product Quantization)**: Compression for memory efficiency.
+
+**When to use**: Any time you need "find similar" - context retrieval, memory search, deduplication.
+
+#### 2. Merkle DAGs for Agent State
+
+Git-like structures for tracking agent decision trees. Each node is content-addressed (hash of contents).
+
+```
+                    ┌─────────────────┐
+                    │ State: abc123   │
+                    │ "User asked X"  │
+                    └────────┬────────┘
+                             │
+              ┌──────────────┴──────────────┐
+              ▼                              ▼
+    ┌─────────────────┐            ┌─────────────────┐
+    │ State: def456   │            │ State: ghi789   │
+    │ "Called tool A" │            │ "Called tool B" │
+    │ (branch 1)      │            │ (branch 2)      │
+    └────────┬────────┘            └─────────────────┘
+             │
+             ▼
+    ┌─────────────────┐
+    │ State: jkl012   │
+    │ "Got result"    │
+    └─────────────────┘
+```
+
+**Benefits**:
+- Immutable history (can't tamper with past decisions)
+- Efficient branching (explore alternatives)
+- Easy rollback (just point to earlier hash)
+- Deduplication (same state = same hash)
+
+**When to use**: Complex planning, speculative execution, audit trails.
+
+#### 3. Persistent Data Structures
+
+Immutable structures that share unchanged parts between versions. Efficient state snapshots.
+
+```
+Version 1:        Version 2 (after update):
+    ┌───┐             ┌───┐
+    │ A │             │ A │ ← shared
+    ├───┤             ├───┤
+    │ B │             │ B │ ← shared
+    ├───┤             ├───┤
+    │ C │             │ C'│ ← new (only this changed)
+    └───┘             └───┘
+    
+Memory: Only C' is new allocation
+```
+
+**Implementations**:
+- Persistent vectors (Clojure-style, 32-way tries)
+- Persistent hash maps (HAMT - Hash Array Mapped Trie)
+- Immutable.js, Immer (JS), pyrsistent (Python)
+
+**When to use**: Checkpointing agent state, undo/redo, concurrent access without locks.
+
+#### 4. Bloom Filters for Context Deduplication
+
+Probabilistic structure: "definitely not seen" or "probably seen." Space-efficient.
+
+```go
+type ContextDeduplicator struct {
+    filter *bloom.BloomFilter
+}
+
+func (d *ContextDeduplicator) ShouldInclude(content string) bool {
+    hash := hashContent(content)
+    if d.filter.Test(hash) {
+        return false  // probably already in context
+    }
+    d.filter.Add(hash)
+    return true  // definitely new
+}
+```
+
+**Properties**:
+- False positives possible (says "seen" when not)
+- False negatives impossible (never says "not seen" when it was)
+- Very space efficient (bits, not full content)
+
+**When to use**: Deduplicating retrieved context, avoiding repeated tool calls, cycle detection.
+
+#### 5. Ring Buffers for Sliding Window Memory
+
+Fixed-size circular buffer. O(1) add, O(1) evict oldest.
+
+```
+Capacity: 5
+
+Add messages: A, B, C, D, E
+┌───┬───┬───┬───┬───┐
+│ A │ B │ C │ D │ E │
+└───┴───┴───┴───┴───┘
+  ↑                 ↑
+  tail              head
+
+Add F (overwrites A):
+┌───┬───┬───┬───┬───┐
+│ F │ B │ C │ D │ E │
+└───┴───┴───┴───┴───┘
+      ↑           ↑
+      tail        head
+```
+
+```go
+type MessageRingBuffer struct {
+    messages []Message
+    head     int
+    tail     int
+    size     int
+    capacity int
+}
+
+func (r *MessageRingBuffer) Add(msg Message) {
+    r.messages[r.head] = msg
+    r.head = (r.head + 1) % r.capacity
+    if r.size == r.capacity {
+        r.tail = (r.tail + 1) % r.capacity
+    } else {
+        r.size++
+    }
+}
+```
+
+**When to use**: Fixed-size conversation history, recent context window, streaming data.
+
+---
+
+### Algorithms
+
+#### 1. Monte Carlo Tree Search (MCTS)
+
+From game AI (AlphaGo), now used for agent planning. Explore action trees probabilistically.
+
+```
+                    ┌─────────────┐
+                    │ Current     │
+                    │ State       │
+                    └──────┬──────┘
+                           │
+         ┌─────────────────┼─────────────────┐
+         ▼                 ▼                 ▼
+    ┌─────────┐       ┌─────────┐       ┌─────────┐
+    │ Action A│       │ Action B│       │ Action C│
+    │ Win: 3/10│      │ Win: 7/10│      │ Win: 2/10│
+    └────┬────┘       └────┬────┘       └─────────┘
+         │                 │
+    ┌────┴────┐       ┌────┴────┐
+    ▼         ▼       ▼         ▼
+  ┌───┐     ┌───┐   ┌───┐     ┌───┐
+  │2/5│     │1/5│   │4/5│     │3/5│
+  └───┘     └───┘   └───┘     └───┘
+```
+
+**Four phases**:
+1. **Selection**: Walk tree using UCB1 (balance exploration/exploitation)
+2. **Expansion**: Add new child node for unexplored action
+3. **Simulation**: Random rollout to terminal state
+4. **Backpropagation**: Update win/visit counts up the tree
+
+**For agents**:
+- Actions = tool calls or response options
+- Simulation = LLM predicts outcome (or cheap heuristic)
+- Used in OpenAI o1-style reasoning
+
+**When to use**: Complex planning with many options, when you can simulate outcomes.
+
+#### 2. Beam Search with Pruning
+
+Generate multiple candidate paths, keep top K, prune rest.
+
+```
+Step 1:     Step 2:           Step 3:
+            
+   A ──┬── A1 (0.9) ──┬── A1a (0.85) ✓ keep
+       │              └── A1b (0.70) ✗ prune
+       ├── A2 (0.7) ──┬── A2a (0.80) ✓ keep
+       │              └── A2b (0.60) ✗ prune
+       └── A3 (0.5) ✗ prune early
+
+Beam width K=2: Keep top 2 at each step
+```
+
+```go
+type BeamSearch struct {
+    BeamWidth int
+    ScoreFunc func(path []Action) float64
+}
+
+func (b *BeamSearch) Search(initial State) []Action {
+    beams := [][]Action{{}}
+    
+    for step := 0; step < maxSteps; step++ {
+        candidates := [][]Action{}
+        for _, path := range beams {
+            for _, action := range possibleActions(path) {
+                candidates = append(candidates, append(path, action))
+            }
+        }
+        // Sort by score, keep top K
+        sort.Slice(candidates, func(i, j int) bool {
+            return b.ScoreFunc(candidates[i]) > b.ScoreFunc(candidates[j])
+        })
+        beams = candidates[:min(b.BeamWidth, len(candidates))]
+    }
+    return beams[0]  // best path
+}
+```
+
+**When to use**: Plan generation, when greedy is too short-sighted but full search is too expensive.
+
+#### 3. A* / Graph Search for Tool Selection
+
+Model tool chains as a graph, find optimal path to goal.
+
+```
+Start: "User wants to analyze sales data"
+
+    ┌──────────────┐
+    │    START     │
+    └──────┬───────┘
+           │
+    ┌──────┴───────┐
+    ▼              ▼
+┌────────┐    ┌────────┐
+│ query  │    │ read   │
+│ db     │    │ file   │
+│ cost:2 │    │ cost:1 │
+└───┬────┘    └───┬────┘
+    │             │
+    └──────┬──────┘
+           ▼
+    ┌────────────┐
+    │ calculator │
+    │ cost: 1    │
+    └─────┬──────┘
+          │
+          ▼
+    ┌────────────┐
+    │   GOAL     │
+    │ "analysis" │
+    └────────────┘
+
+A* finds: read_file → calculator (cost: 2)
+vs: query_db → calculator (cost: 3)
+```
+
+**Heuristic function**: Estimate remaining cost to goal (e.g., "how many more tools needed?")
+
+**When to use**: Tool chain optimization, finding efficient paths through capability space.
+
+#### 4. Semantic Caching with LSH
+
+Locality-Sensitive Hashing: Similar inputs hash to same bucket. Enables "fuzzy" cache lookups.
+
+```
+Query 1: "What's the weather in Seattle?"
+Query 2: "Seattle weather today?"
+Query 3: "How's the weather in Seattle?"
+
+Traditional cache: 3 misses (exact match fails)
+LSH cache: 1 miss, 2 hits (semantically similar)
+
+┌─────────────────────────────────────────────┐
+│              LSH Hash Buckets               │
+├─────────────────────────────────────────────┤
+│ Bucket 0x3F2A: [weather queries...]         │
+│ Bucket 0x7B1C: [code questions...]          │
+│ Bucket 0x2D4E: [math problems...]           │
+└─────────────────────────────────────────────┘
+```
+
+```go
+type SemanticCache struct {
+    lsh       *LSHIndex
+    cache     map[string]CachedResponse
+    threshold float64
+}
+
+func (c *SemanticCache) Get(query string) (*CachedResponse, bool) {
+    embedding := embed(query)
+    candidates := c.lsh.Query(embedding)
+    
+    for _, candidate := range candidates {
+        if cosineSimilarity(embedding, candidate.Embedding) > c.threshold {
+            return candidate.Response, true
+        }
+    }
+    return nil, false
+}
+```
+
+**When to use**: Reducing LLM calls for similar queries, cost optimization.
+
+#### 5. UCB1 (Upper Confidence Bound) for Action Selection
+
+Balance exploration vs exploitation when choosing actions.
+
+```
+UCB1 = average_reward + C * sqrt(ln(total_trials) / action_trials)
+       └─────┬─────┘   └──────────────┬──────────────────────┘
+         exploit                    explore
+         (known good)               (uncertainty bonus)
+```
+
+```go
+func (a *ActionSelector) SelectAction(actions []Action) Action {
+    totalTrials := a.getTotalTrials()
+    
+    bestScore := -1.0
+    var bestAction Action
+    
+    for _, action := range actions {
+        trials := a.getTrials(action)
+        if trials == 0 {
+            return action  // always try untried actions
+        }
+        
+        avgReward := a.getAverageReward(action)
+        exploration := math.Sqrt(math.Log(float64(totalTrials)) / float64(trials))
+        ucb := avgReward + a.C * exploration
+        
+        if ucb > bestScore {
+            bestScore = ucb
+            bestAction = action
+        }
+    }
+    return bestAction
+}
+```
+
+**When to use**: Tool selection when you have feedback, A/B testing prompts, adaptive routing.
+
+---
+
+### Emerging Patterns
+
+#### 1. Chain-of-Thought as Structured Data
+
+Treat reasoning traces as parseable data, not just text.
+
+```go
+type ThoughtChain struct {
+    Steps []ThoughtStep `json:"steps"`
+}
+
+type ThoughtStep struct {
+    Type       string `json:"type"`  // "observation", "reasoning", "conclusion"
+    Content    string `json:"content"`
+    Confidence float64 `json:"confidence,omitempty"`
+    References []string `json:"references,omitempty"`
+}
+
+// Parse from LLM output
+func ParseThoughtChain(llmOutput string) (*ThoughtChain, error) {
+    // Extract structured reasoning from <thinking> tags or JSON
+}
+
+// Validate reasoning
+func (tc *ThoughtChain) Validate() error {
+    // Check logical consistency
+    // Verify references exist
+    // Flag low-confidence steps
+}
+```
+
+**Benefits**:
+- Can validate reasoning before acting
+- Can branch on specific steps
+- Enables reasoning about reasoning
+
+#### 2. Constrained Decoding / Tool Use Grammars
+
+Force LLM output to conform to a grammar. Guarantees valid structure.
+
+```
+Grammar for tool calls:
+
+tool_call    := "{" "name" ":" tool_name "," "args" ":" args_obj "}"
+tool_name    := "\"" ("calculator" | "read_file" | "search") "\""
+args_obj     := "{" (arg_pair ("," arg_pair)*)? "}"
+arg_pair     := "\"" identifier "\"" ":" value
+
+LLM can ONLY output strings matching this grammar.
+No more "I'll call the calculator" without actually calling it.
+```
+
+**Implementations**:
+- Outlines (Python)
+- Guidance (Microsoft)
+- LMQL
+- llama.cpp grammar sampling
+
+**When to use**: When you need guaranteed parseable output, tool calling, structured extraction.
+
+#### 3. Speculative Execution for Agents
+
+Run multiple possible next steps in parallel, discard unused.
+
+```
+User: "What's the weather and my calendar for tomorrow?"
+
+Sequential:                    Speculative:
+                              
+weather_api() ─┐               weather_api() ──┐
+               │ 2s                             ├── 1s (parallel)
+calendar_api() ┘               calendar_api() ─┘
+
+Total: 2s                      Total: 1s
+```
+
+```go
+func (a *Agent) SpeculativeExecute(possibleTools []ToolCall) []ToolResult {
+    results := make(chan ToolResult, len(possibleTools))
+    
+    for _, tool := range possibleTools {
+        go func(t ToolCall) {
+            result := a.executeTool(t)
+            results <- result
+        }(tool)
+    }
+    
+    // Collect all results
+    allResults := []ToolResult{}
+    for range possibleTools {
+        allResults = append(allResults, <-results)
+    }
+    return allResults
+    // LLM will use what it needs, ignore rest
+}
+```
+
+**Trade-off**: More compute/API calls for lower latency. Worth it for independent tools.
+
+#### 4. Actor Model for Multi-Agent
+
+Erlang/Akka-style actors. Each agent is an actor with a mailbox.
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                     Actor System                             │
+├─────────────────────────────────────────────────────────────┤
+│                                                              │
+│  ┌──────────────┐    message    ┌──────────────┐            │
+│  │   Planner    │──────────────▶│   Executor   │            │
+│  │   Actor      │               │   Actor      │            │
+│  │ ┌──────────┐ │               │ ┌──────────┐ │            │
+│  │ │ Mailbox  │ │               │ │ Mailbox  │ │            │
+│  │ └──────────┘ │               │ └──────────┘ │            │
+│  └──────────────┘               └──────┬───────┘            │
+│         ▲                              │                     │
+│         │         result               │                     │
+│         └──────────────────────────────┘                     │
+│                                                              │
+└─────────────────────────────────────────────────────────────┘
+```
+
+```go
+type AgentActor struct {
+    mailbox chan Message
+    state   AgentState
+    llm     LLMProvider
+}
+
+func (a *AgentActor) Run() {
+    for msg := range a.mailbox {
+        switch msg.Type {
+        case "task":
+            result := a.processTask(msg.Payload)
+            msg.ReplyTo <- result
+        case "query":
+            a.handleQuery(msg)
+        }
+    }
+}
+
+// Send message to another agent
+func (a *AgentActor) Send(target *AgentActor, msg Message) {
+    target.mailbox <- msg
+}
+```
+
+**Benefits**:
+- Natural isolation (each agent has own state)
+- Location transparency (agents can be distributed)
+- Fault tolerance (supervisor hierarchies)
+
+#### 5. Event Sourcing for Agent State
+
+Store events, not state. Rebuild state by replaying.
+
+```
+Event Log:
+┌────────────────────────────────────────────────────────────┐
+│ 1. TaskStarted{id: "abc", input: "analyze data"}           │
+│ 2. ToolCalled{tool: "read_file", args: {...}}              │
+│ 3. ToolSucceeded{tool: "read_file", result: "..."}         │
+│ 4. LLMCalled{prompt_hash: "xyz", tokens: 1234}             │
+│ 5. LLMResponded{response_hash: "def", tool_calls: [...]}   │
+│ 6. ToolCalled{tool: "calculator", args: {...}}             │
+│ 7. TaskCompleted{id: "abc", result: "..."}                 │
+└────────────────────────────────────────────────────────────┘
+
+Current state = replay(events)
+State at step 3 = replay(events[:3])
+```
+
+```go
+type EventStore struct {
+    events []Event
+}
+
+type Event interface {
+    Apply(state *AgentState) *AgentState
+}
+
+func (s *EventStore) Append(event Event) {
+    s.events = append(s.events, event)
+}
+
+func (s *EventStore) Rebuild() *AgentState {
+    state := &AgentState{}
+    for _, event := range s.events {
+        state = event.Apply(state)
+    }
+    return state
+}
+
+func (s *EventStore) StateAt(index int) *AgentState {
+    state := &AgentState{}
+    for _, event := range s.events[:index] {
+        state = event.Apply(state)
+    }
+    return state
+}
+```
+
+**Benefits**:
+- Complete audit trail
+- Time travel debugging
+- Easy replay for testing
+- Natural fit for agent decisions
+
+#### 6. Saga Pattern for Long-Running Tasks
+
+Sequence of steps with compensating actions for rollback.
+
+```
+Forward actions:              Compensating actions:
+                              
+1. Create PR ─────────────── Delete PR
+       │
+       ▼
+2. Run tests ─────────────── (no compensation needed)
+       │
+       ▼
+3. Request review ────────── Cancel review request
+       │
+       ▼
+4. Merge PR ──────────────── Revert merge
+       │
+       ▼
+   SUCCESS
+
+If step 3 fails:
+- Run compensating action for step 1 (delete PR)
+- Steps 2 has no compensation
+- Result: Clean rollback
+```
+
+```go
+type Saga struct {
+    Steps []SagaStep
+}
+
+type SagaStep struct {
+    Name       string
+    Execute    func(ctx context.Context) error
+    Compensate func(ctx context.Context) error
+}
+
+func (s *Saga) Run(ctx context.Context) error {
+    completed := []SagaStep{}
+    
+    for _, step := range s.Steps {
+        if err := step.Execute(ctx); err != nil {
+            // Rollback in reverse order
+            for i := len(completed) - 1; i >= 0; i-- {
+                if completed[i].Compensate != nil {
+                    completed[i].Compensate(ctx)
+                }
+            }
+            return fmt.Errorf("saga failed at %s: %w", step.Name, err)
+        }
+        completed = append(completed, step)
+    }
+    return nil
+}
+```
+
+**When to use**: Multi-step tasks with side effects, need clean rollback on failure.
+
+#### 7. Circuit Breaker for LLM Calls
+
+Fail fast when provider is unhealthy. Prevent cascade failures.
+
+```
+States:
+┌────────┐  failures > threshold  ┌────────┐
+│ CLOSED │───────────────────────▶│  OPEN  │
+│(normal)│                        │ (fail  │
+└────────┘                        │  fast) │
+    ▲                             └───┬────┘
+    │                                 │
+    │    success                      │ timeout
+    │                                 │
+┌───┴────────┐◀───────────────────────┘
+│ HALF-OPEN  │
+│ (testing)  │
+└────────────┘
+```
+
+```go
+type CircuitBreaker struct {
+    state           State
+    failures        int
+    threshold       int
+    timeout         time.Duration
+    lastFailureTime time.Time
+}
+
+func (cb *CircuitBreaker) Call(fn func() (*LLMResponse, error)) (*LLMResponse, error) {
+    if cb.state == Open {
+        if time.Since(cb.lastFailureTime) > cb.timeout {
+            cb.state = HalfOpen
+        } else {
+            return nil, ErrCircuitOpen
+        }
+    }
+    
+    resp, err := fn()
+    
+    if err != nil {
+        cb.failures++
+        cb.lastFailureTime = time.Now()
+        if cb.failures >= cb.threshold {
+            cb.state = Open
+        }
+        return nil, err
+    }
+    
+    cb.failures = 0
+    cb.state = Closed
+    return resp, nil
+}
+```
+
+#### 8. Token Bucket for Rate Limiting
+
+Control rate of LLM calls to stay within quotas.
+
+```
+Bucket capacity: 10 tokens
+Refill rate: 1 token/second
+
+Time 0:  [••••••••••] 10 tokens
+Call:    [•••••••••·]  9 tokens (1 consumed)
+Call:    [••••••••··]  8 tokens
+...
+Time 10: [••••••••••] 10 tokens (refilled)
+```
+
+```go
+type TokenBucket struct {
+    tokens     float64
+    capacity   float64
+    refillRate float64  // tokens per second
+    lastRefill time.Time
+    mu         sync.Mutex
+}
+
+func (tb *TokenBucket) Take(n float64) bool {
+    tb.mu.Lock()
+    defer tb.mu.Unlock()
+    
+    // Refill based on elapsed time
+    now := time.Now()
+    elapsed := now.Sub(tb.lastRefill).Seconds()
+    tb.tokens = min(tb.capacity, tb.tokens + elapsed * tb.refillRate)
+    tb.lastRefill = now
+    
+    if tb.tokens >= n {
+        tb.tokens -= n
+        return true
+    }
+    return false
+}
+```
+
+---
+
+### Research Frontier
+
+These are emerging areas, not yet production-ready but worth watching.
+
+#### 1. World Models
+
+Agents that build internal simulations to predict outcomes before acting.
+
+```
+Traditional:  Act → Observe outcome → Learn
+World Model:  Imagine action → Predict outcome → Decide → Act
+
+┌─────────────────────────────────────────────────────────────┐
+│                    World Model                               │
+├─────────────────────────────────────────────────────────────┤
+│                                                              │
+│  Current State ──▶ Simulate Action A ──▶ Predicted State A  │
+│        │                                                     │
+│        └─────────▶ Simulate Action B ──▶ Predicted State B  │
+│                                                              │
+│  Choose action with best predicted outcome                   │
+│                                                              │
+└─────────────────────────────────────────────────────────────┘
+```
+
+**Research**: Dreamer, MuZero, IRIS
+
+#### 2. Constitutional AI / Self-Critique
+
+Agent critiques its own outputs against principles before responding.
+
+```
+Generate ──▶ Critique against principles ──▶ Revise ──▶ Output
+
+Principles:
+- Be helpful
+- Be harmless  
+- Be honest
+- Don't reveal private information
+- Verify facts before stating
+```
+
+**Research**: Anthropic Constitutional AI, Self-Refine
+
+#### 3. Tool Learning
+
+Agents that learn to use new tools from documentation alone.
+
+```
+Input: Tool documentation (API spec, examples)
+Output: Ability to use tool correctly
+
+No fine-tuning required - in-context learning of tool usage
+```
+
+**Research**: Toolformer, Gorilla, ToolLLM
+
+#### 4. Hierarchical Task Networks (HTN) for LLM Planning
+
+Decompose high-level goals into primitive actions using predefined methods.
+
+```
+Goal: "Deploy application"
+         │
+         ▼ decompose
+┌─────────────────────────────────────┐
+│ Method: deploy-to-production        │
+│ Subtasks:                           │
+│   1. run-tests                      │
+│   2. build-artifact                 │
+│   3. push-to-registry               │
+│   4. update-kubernetes              │
+└─────────────────────────────────────┘
+         │
+         ▼ decompose each
+┌─────────────────────────────────────┐
+│ Primitive actions (tool calls)      │
+└─────────────────────────────────────┘
+```
+
+**Research**: LLM+P, SayCan, Inner Monologue
+
+---
+
+### Summary: What to Learn
+
+| Category | Must Know | Good to Know | Research/Future |
+|----------|-----------|--------------|-----------------|
+| **Data Structures** | Vector indexes, Ring buffers | Persistent structures, Bloom filters | Merkle DAGs |
+| **Algorithms** | Beam search, A* | MCTS, UCB1 | World models |
+| **Patterns** | RAG pipeline, Circuit breaker | Event sourcing, Saga | Constitutional AI |
+| **Concurrency** | Token bucket, Rate limiting | Actor model | Distributed consensus |
+
+**The trend**: Classic CS is being adapted for non-deterministic, LLM-based systems. The fundamentals matter more than ever - you're just applying them in new contexts.
