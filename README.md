@@ -131,53 +131,13 @@ For detailed C4 diagrams covering all operational modes, see [docs/wiki/ARCHITEC
 
 ### Single Agent Flow
 ```
-┌──────┐     ┌───────┐     ┌─────────┐     ┌───────┐
-│ User │────▶│  CLI  │────▶│  Agent  │────▶│ Claude│
-└──────┘     └───────┘     └────┬────┘     └───┬───┘
-                                │              │
-                                ▼              │
-                           ┌─────────┐         │
-                           │  Tools  │◀────────┘
-                           │(calc,   │  tool_use
-                           │ file)   │
-                           └─────────┘
+User Input → Agent → LLM → Tool Call? → Execute Tool → LLM → Response
 ```
 
 ### Multi-Agent Flow
 ```
-┌──────┐     ┌────────────┐     ┌───────────┐     ┌───────┐
-│ User │────▶│Orchestrator│────▶│ Architect │────▶│ Claude│
-└──────┘     └─────┬──────┘     └─────┬─────┘     └───────┘
-                   │                  │
-                   │                  ▼ Plan
-                   │            ┌───────────┐     ┌───────┐
-                   └───────────▶│   Coder   │────▶│ Claude│
-                                └─────┬─────┘     └───────┘
-                                      │
-                                      ▼
-                                ┌───────────┐
-                                │FileReader │
-                                │FileWriter │
-                                └───────────┘
-```
-
-### MCP Server Mode
-```
-┌──────┐     ┌───────┐     ┌─────────┐     ┌────────────┐
-│ User │────▶│  CLI  │────▶│  Agent  │────▶│ MCPManager │
-└──────┘     └───────┘     └────┬────┘     └──────┬─────┘
-                                │                 │
-                                │                 │ JSON-RPC
-                                │                 ▼
-                                │          ┌────────────┐
-                                │          │ MCP Server │
-                                │          │(subprocess)│
-                                │          └──────┬─────┘
-                                │                 │
-                                ▼                 ▼
-                           ┌─────────┐      ┌─────────┐
-                           │ Claude  │      │  Tools  │
-                           └─────────┘      └─────────┘
+User Goal → Orchestrator → Architect Agent → Plan
+                        → Coder Agent → Execute Plan → Result
 ```
 
 ## Running Tests
