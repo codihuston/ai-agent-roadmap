@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"os/exec"
 	"sync"
 	"sync/atomic"
@@ -23,6 +24,7 @@ type StdioMCPClient struct {
 	cmd    *exec.Cmd
 	stdin  io.WriteCloser
 	stdout *bufio.Reader
+	stderr *bufio.Reader
 
 	requestID atomic.Int64
 	mu        sync.Mutex
@@ -69,9 +71,18 @@ func (c *StdioMCPClient) Connect(ctx context.Context) error {
 	}
 	c.stdout = bufio.NewReader(stdout)
 
+	stderr, err := c.cmd.StderrPipe()
+	if err != nil {
+		return fmt.Errorf("failed to create stderr pipe: %w", err)
+	}
+	c.stderr = bufio.NewReader(stderr)
+
 	if err := c.cmd.Start(); err != nil {
 		return fmt.Errorf("failed to start MCP server: %w", err)
 	}
+
+	// Start goroutine to read and log server stderr
+	go c.logServerStderr()
 
 	// Send initialize request
 	if err := c.initialize(ctx); err != nil {
@@ -250,6 +261,19 @@ func (c *StdioMCPClient) Close() error {
 	}
 
 	return nil
+}
+
+// logServerStderr reads and logs the server's stderr output.
+func (c *StdioMCPClient) logServerStderr() {
+	for {
+		line, err := c.stderr.ReadString('\n')
+		if err != nil {
+			return // EOF or error, stop logging
+		}
+		if line != "" {
+			log.Printf("[MCP Server stderr] %s", line)
+		}
+	}
 }
 
 // sendRequest sends a JSON-RPC request and waits for the response.

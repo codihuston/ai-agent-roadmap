@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "agentic-tools": {
+      "command": "./mcp-server",
+      "args": [],
+      "disabled": false,
+      "autoApprove": ["calculator", "read_file"]
+    }
+  }
+}
