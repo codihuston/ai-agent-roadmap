@@ -1082,3 +1082,207 @@ groups:
         annotations:
           summary: "LLM API rate limited"
 ```
+
+
+---
+
+## Agentic Orchestration Patterns
+
+Different orchestration patterns suit different use cases. Here's a breakdown of patterns with real-world product examples.
+
+### 1. Sequential Pipeline
+
+```
+Agent A → Agent B → Agent C → Result
+```
+
+Each agent has a distinct phase. Simple, predictable, easy to debug.
+
+| Use Case | Example Products | Why This Pattern |
+|----------|------------------|------------------|
+| Code generation | Cursor, GitHub Copilot Workspace | Plan → Code → Review flow |
+| Content creation | Jasper, Copy.ai | Research → Draft → Edit → Polish |
+| Document processing | DocuSign IAM, Eigen Technologies | Extract → Validate → Transform |
+| CI/CD pipelines | Harness AI, Octopus Deploy | Build → Test → Deploy → Verify |
+
+**When to use**: Clear sequential phases, each step depends on previous output.
+
+### 2. Router/Dispatcher
+
+```
+         ┌→ Specialist A
+Input → Router → Specialist B → Output
+         └→ Specialist C
+```
+
+A classifier routes requests to specialized agents.
+
+| Use Case | Example Products | Why This Pattern |
+|----------|------------------|------------------|
+| Customer support | Intercom Fin, Zendesk AI | Route to billing/technical/sales specialists |
+| Multi-domain assistants | ChatGPT with plugins, Claude with tools | Route to code/search/math capabilities |
+| Enterprise search | Glean, Coveo | Route to HR/IT/Finance knowledge bases |
+| Healthcare triage | Ada Health, Babylon | Route symptoms to appropriate specialty |
+
+**When to use**: Multiple specialized domains, need to classify intent first.
+
+### 3. Supervisor/Worker
+
+```
+        ┌─ Worker A
+Supervisor ├─ Worker B  → Supervisor aggregates
+        └─ Worker C
+```
+
+Supervisor decomposes tasks, delegates, and synthesizes results.
+
+| Use Case | Example Products | Why This Pattern |
+|----------|------------------|------------------|
+| Research & analysis | Perplexity, Elicit | Break research into sub-queries, synthesize |
+| Complex coding tasks | Devin, OpenHands | Decompose feature into subtasks |
+| Data analysis | Julius AI, Akkio | Split analysis across data sources |
+| Report generation | Tome, Gamma | Supervisor coordinates section writers |
+
+**When to use**: Complex tasks that can be decomposed, need aggregation of multiple results.
+
+### 4. Debate/Adversarial
+
+```
+Agent A (propose) ←→ Agent B (critique) → Consensus
+```
+
+One proposes, another critiques. Iterate until agreement.
+
+| Use Case | Example Products | Why This Pattern |
+|----------|------------------|------------------|
+| Code review | CodeRabbit, Codium PR-Agent | Generator vs reviewer |
+| Fact-checking | Factiverse, ClaimBuster | Claim maker vs fact checker |
+| Legal analysis | Harvey, CoCounsel | Argument vs counter-argument |
+| Security review | Snyk AI, Semgrep | Code generator vs security auditor |
+
+**When to use**: High-stakes decisions, need verification, adversarial robustness.
+
+### 5. Hierarchical
+
+```
+Executive Agent
+    ├─ Manager A → Workers
+    └─ Manager B → Workers
+```
+
+Multiple delegation layers. Executives strategize, managers coordinate, workers execute.
+
+| Use Case | Example Products | Why This Pattern |
+|----------|------------------|------------------|
+| Autonomous software dev | Devin, Factory AI | PM → Tech Lead → Developers |
+| Marketing campaigns | Pencil, Smartly.io | Strategy → Creative → Execution |
+| Game AI | Unity ML-Agents, NVIDIA ACE | Director → Scene managers → NPCs |
+| Robotics | Boston Dynamics, Figure AI | Mission planner → Task coordinators → Actuators |
+
+**When to use**: Large-scale projects, need organizational structure, different abstraction levels.
+
+### 6. Swarm/Collaborative
+
+```
+Agent A ←→ Agent B
+   ↕         ↕
+Agent C ←→ Agent D
+```
+
+Peer-to-peer communication, emergent behavior, no central coordinator.
+
+| Use Case | Example Products | Why This Pattern |
+|----------|------------------|------------------|
+| Multi-agent simulation | AutoGen, CrewAI | Research collaboration scenarios |
+| Game NPCs | AI Dungeon, Character.ai (multi-char) | Characters interact naturally |
+| Trading systems | QuantConnect, Alpaca | Multiple strategies negotiate |
+| Scientific discovery | Coscientist, ChemCrow | Agents collaborate on hypotheses |
+
+**When to use**: Emergent behavior desired, simulation, research. Hard to debug - use cautiously.
+
+### 7. Map-Reduce
+
+```
+        ┌→ Agent (chunk 1) ─┐
+Input → ├→ Agent (chunk 2) ─┼→ Aggregator → Output
+        └→ Agent (chunk 3) ─┘
+```
+
+Parallelize across identical agents, then combine results.
+
+| Use Case | Example Products | Why This Pattern |
+|----------|------------------|------------------|
+| Document analysis | Docugami, Instabase | Process pages in parallel |
+| Codebase analysis | Sourcegraph Cody, Tabnine | Analyze files in parallel |
+| Data extraction | Scale AI, Labelbox | Parallel annotation/extraction |
+| Translation | DeepL, Smartling | Translate sections in parallel |
+
+**When to use**: Large inputs that can be chunked, embarrassingly parallel workloads.
+
+### 8. Reflection/Self-Critique
+
+```
+Agent → Output → Same Agent (critique mode) → Refined Output
+```
+
+Single agent reviews its own work with a different prompt/persona.
+
+| Use Case | Example Products | Why This Pattern |
+|----------|------------------|------------------|
+| Writing improvement | Grammarly, ProWritingAid | Draft → Self-edit |
+| Code refinement | Cursor (with review), Aider | Generate → Self-review |
+| Math/reasoning | OpenAI o1, Claude thinking | Solve → Verify steps |
+| Image generation | Midjourney (variations), DALL-E | Generate → Self-critique → Refine |
+
+**When to use**: Quality improvement without multi-agent complexity, cheaper than debate pattern.
+
+### 9. Plan-Execute-Verify
+
+```
+Planner → Executor → Verifier ─┐
+    ↑                          │
+    └──────── (retry) ─────────┘
+```
+
+Explicit verification with feedback loop for retry.
+
+| Use Case | Example Products | Why This Pattern |
+|----------|------------------|------------------|
+| Autonomous browsing | MultiOn, Adept | Plan actions → Execute → Verify page state |
+| Test generation | Testim, Mabl | Plan tests → Run → Verify results |
+| Infrastructure | Pulumi AI, Terraform AI | Plan changes → Apply → Verify state |
+| Data pipelines | Fivetran, Airbyte | Plan sync → Execute → Validate data |
+
+**When to use**: Correctness critical, need explicit verification, can afford retries.
+
+---
+
+### Choosing the Right Pattern
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                     Pattern Selection Guide                              │
+├─────────────────────────────────────────────────────────────────────────┤
+│                                                                          │
+│  Simple, linear workflow?          → Sequential Pipeline                 │
+│  Multiple specialized domains?     → Router/Dispatcher                   │
+│  Complex decomposable task?        → Supervisor/Worker                   │
+│  High-stakes, need verification?   → Debate/Adversarial                  │
+│  Large org-like structure?         → Hierarchical                        │
+│  Emergent behavior needed?         → Swarm (careful!)                    │
+│  Large parallelizable input?       → Map-Reduce                          │
+│  Quality boost, low complexity?    → Reflection/Self-Critique            │
+│  Must be correct, can retry?       → Plan-Execute-Verify                 │
+│                                                                          │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+### Hybrid Approaches
+
+Real systems often combine patterns:
+
+- **Cursor**: Router (intent) → Sequential (plan/code/review) → Reflection (self-edit)
+- **Devin**: Hierarchical (PM/dev) → Plan-Execute-Verify (coding loop)
+- **Perplexity**: Router (query type) → Map-Reduce (search) → Supervisor (synthesize)
+
+Start simple (sequential or reflection), add complexity only when needed.
